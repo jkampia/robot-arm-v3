@@ -5,6 +5,7 @@
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
 #include "serial_utils.hpp"
+#include "math_utils.hpp"
 
 #include <cmath>
 #include <vector>
@@ -31,6 +32,7 @@ float stepsPerDeg[numJoints];
 float degsPerStep[numJoints];
 
 std::vector<uint8_t> jointDelays[numJoints];
+
 
 /* serial */
 String serialBuffer[serialBufferLength];
@@ -73,8 +75,10 @@ void loop()
 
 
 
-
-
+/*
+Reads messages in the format: <val1:val2:val3>
+assigns to global string array serialBuffer
+*/
 void fastSerialRead(bool debug)
 {
   uint64_t startTime = micros();
@@ -132,7 +136,9 @@ void fastSerialRead(bool debug)
 }
 
 
-
+/*
+Calculates some constants based on robot arm parameters
+*/
 void calculateJointInfo()
 {
   for (int i = 0; i < numJoints; i++)
@@ -152,6 +158,8 @@ void calculateJointInfo()
 
   printArray("Steps per rad: ", stepsPerRad, numJoints);
 }
+
+
 
 /*
 Set directions for all joints
@@ -174,12 +182,6 @@ void setJointDirections(const int *jointSigns)
   else digitalWriteFast(dir4, HIGH);
 }
 
-
-/* returns the sign of a number: -1 if negative, 1 if positive 0 if 0 */
-int sign(int x)
-{
-  return (x > 0) - (x < 0);
-}
 
 
 
@@ -385,20 +387,6 @@ void goStepsAccel(const int *stepsToMove)
 
 
 
-
-void scaleVector(std::vector<uint8_t> delayVector, float scalar) 
-{
-  uint64_t scaledTotalTime = 0;
-  for (auto delay : delayVector) 
-  {
-    delay *= scalar; 
-    scaledTotalTime += delay;
-  }
-  //Serial.println("Scaled time: " + String(scaled_time));
-}
-
-
-
 /*
 Magic secret sauce function, calculates step delays required for smooth S-curve 
 for a single joint
@@ -412,7 +400,6 @@ void calculateStepDelays(const int minStepDelay, const int numSteps, std::vector
 { 
   const float angle = 1;
   const float accel = 0.1;
-
   /* some magic number idk why it's this */
   const float delay0 = 2000 * sqrt(2 * angle / accel) * 0.67703;
 
@@ -558,7 +545,7 @@ void parseCommand()
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL:
     {
-      Serial.println("Performing joint space accel movement");
+      Serial.println("Received target angle joint space accel command");
 
       float desiredAngles[numJoints];
       // copy over current angles as defaults in case msg is not populated correctly
@@ -579,9 +566,11 @@ void parseCommand()
 
     case serialCommand::TGT_POSITION_JOINT_SPACE_ACCEL:
     {
-      Serial.println("Performing target position joint space accel movement");
+      Serial.println("Received target position joint space accel command");
 
       float desiredPoseXYZPR[numJoints];
+      bool commandValid = true;
+
       for (int i = 0; i < numJoints; i++)
       {
         if (serialBuffer[i+1].length() > 0) 
@@ -591,10 +580,13 @@ void parseCommand()
         else
         {
           Serial.println("Position command incomplete: arg" + String(i) + " missing");
+          commandValid = false;
           break;
         }
       }
 
+      if (!commandValid) break;
+      
       float desiredAngles[numJoints];
       if (!solveIK(desiredPoseXYZPR, desiredAngles)) break;
       
