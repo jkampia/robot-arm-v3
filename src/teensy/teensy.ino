@@ -61,12 +61,12 @@ void setup()
   for (int i = 0; i < numJoints; i++)
   {
     jointDelays[i].reserve(32000);
-    enaFlags[i] = 1;
   }
 
+  printArray("Joint lengths: ", jointLengths, numJoints);
   calculateJointInfo();
-
   printFreeMemory();
+
 
   Serial.print("\n");
   Serial.println("< END SETUP >");
@@ -168,7 +168,7 @@ Currently using digitalWriteFast so each dir pin has to be a compile time static
 FUNCTION PARAMS
 jointSigns: direction of joint rotation (+1 for CCW, -1 for CW)
 */
-void setJointDirections(const int* jointSigns)
+void setJointDirections(const int *jointSigns)
 {
   if (jointSigns[0] < 0) digitalWriteFast(dir0, LOW);
   else digitalWriteFast(dir0, HIGH);

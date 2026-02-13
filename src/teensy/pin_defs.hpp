@@ -1,3 +1,5 @@
+#pragma once
+
 /* teensy write pins must be macros or const int
    in order to be used with digitalWriteFast */
 

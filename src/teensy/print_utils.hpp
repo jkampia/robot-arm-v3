@@ -1,3 +1,5 @@
+#pragma once
+
 /* print helpers */
 
 inline void printArray(const String& msg, const float* array, int len)
