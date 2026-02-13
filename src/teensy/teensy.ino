@@ -4,6 +4,7 @@
 
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
+#include "serial_utils.hpp"
 
 #include <cmath>
 #include <vector>
@@ -12,15 +13,17 @@
 /* joint stuff */
 #define numJoints 5
 
-int   currentJointSteps[numJoints]  = {0,   0,   0,   0,   0  };
-float currentJointAngles[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
-float currentPose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
-int   enaFlags[numJoints]           = {1,   1,   1,   1,   1  };
 
-const float jointLengths[numJoints] = {100, 300, 250, 50, 50};
-const float gearReduction[numJoints] = {10.0, 10.0, 20.0, 5.0, 1.0};
-const int stepsPerRev[numJoints] = {3200, 3200, 3200, 3200, 3200};
-const int minStepDelay[numJoints] = {100, 100, 100, 100, 100};
+int   currentJointSteps[numJoints]   = {0,   0,   0,   0,   0  };
+float currentJointAngles[numJoints]  = {0.0, 0.0, 0.0, 0.0, 0.0};
+float currentPose[numJoints]         = {0.0, 0.0, 0.0, 0.0, 0.0};
+int   enaFlags[numJoints]            = {1,   1,   1,   1,   1  };
+
+
+const float jointLengths[numJoints]  = {100,  300,  250,  50,   50};
+const float gearReduction[numJoints] = {10.0, 10.0, 20.0, 5.0,  1.0};
+const int stepsPerRev[numJoints]     = {3200, 3200, 3200, 3200, 3200};
+const int minStepDelay[numJoints]    = {100,  100,  100,  100,  100};
 
 float stepsPerRad[numJoints];
 float radsPerStep[numJoints];
@@ -30,19 +33,8 @@ float degsPerStep[numJoints];
 std::vector<uint8_t> jointDelays[numJoints];
 
 /* serial */
-#define serialBufferLength 10
-#define serialBufferNumBytes 32
 String serialBuffer[serialBufferLength];
 bool newCommand = false;
-
-enum class serialCommand : int
-{
-  HOME = 0,
-  TGT_ANGLES_JOINT_SPACE_ACCEL = 1,
-  TGT_POSITION_JOINT_SPACE_ACCEL = 2,
-  DELTA_ANGLES_JOINT_SPACE_ACCEL = 3,
-  DELTA_POSITION_JOINT_SPACE_ACCEL = 4
-};
 
 
 void setup() 
