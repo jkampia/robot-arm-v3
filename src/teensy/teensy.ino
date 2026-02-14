@@ -24,12 +24,13 @@ int   currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
 
+const int enaPins[numJoints] = {ena0, ena1, ena2, ena3, ena4};
 int   enaFlags[numJoints] = {1, 1, 1, 1, 1};
 
 const float jointLengths[numJoints]  = {100,  300,  250,  50,   50};
 const float gearReduction[numJoints] = {10.0, 10.0, 20.0, 5.0,  1.0};
 const int stepsPerRev[numJoints]     = {3200, 3200, 3200, 3200, 3200};
-const int minStepDelay[numJoints]    = {100,  100,  100,  100,  100};
+const int minStepDelay[numJoints]    = {20,  20,  20,  20,  20};
 
 float stepsPerRad[numJoints];
 float radsPerStep[numJoints];
@@ -52,6 +53,26 @@ void setup()
   Serial.println("< NEW PROGRAM >");
   Serial.print("\n");
 
+  pinMode(pul0, OUTPUT);
+  pinMode(dir0, OUTPUT);
+  pinMode(ena0, OUTPUT);
+
+  pinMode(pul1, OUTPUT);
+  pinMode(dir1, OUTPUT);
+  pinMode(ena1, OUTPUT);
+
+  pinMode(pul2, OUTPUT);
+  pinMode(dir2, OUTPUT);
+  pinMode(ena2, OUTPUT);
+
+  pinMode(pul3, OUTPUT);
+  pinMode(dir3, OUTPUT);
+  pinMode(ena3, OUTPUT);
+
+  pinMode(pul4, OUTPUT);
+  pinMode(dir4, OUTPUT);
+  pinMode(ena4, OUTPUT);
+
   for (int i = 0; i < serialBufferLength; i++)
   {
     serialBuffer[i].reserve(serialBufferNumBytes);
@@ -64,6 +85,8 @@ void setup()
     currentJointSteps[i] = homeJointSteps[i];
     currentJointAngles[i] = homeJointAngles[i];
     currentPose[i] = homePose[i];
+
+    digitalWrite(enaPins[i], HIGH);
   }
 
   printArray("Joint lengths: ", jointLengths, numJoints);
@@ -194,6 +217,8 @@ void setJointDirections(const int *jointSigns)
 
 
 
+
+
 /* 
 Supposed to be a wrapper that handles joint-space movements with and without acceleration
 Right now it kind of only does S-curve accel movements
@@ -294,10 +319,12 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       if (dt > half && dt < delay) 
       {
         digitalWriteFast(pul0, HIGH);
+        //Serial.println("H");
       }
       else if (dt >= delay)
       {
         digitalWriteFast(pul0, LOW);
+        //Serial.println("L");
         stepCount[0]++; 
         refTime[0] = now;
       }
@@ -411,9 +438,10 @@ void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
   int tempArray[numJoints];
   for (int i = 0; i < numJoints; i++)
   {
+    int delay = movementTimeUs / stepsToMove[i];
     jointDelays[i].clear();
-    jointDelays[i].front() = movementTimeUs / stepsToMove[i];
-    tempArray[i] = jointDelays[i].front();
+    jointDelays[i].front() = delay;
+    tempArray[i] = delay;
   }
 
   printArray("Joint step delays: ", tempArray, numJoints);
@@ -463,7 +491,7 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
     }
   }
 
-  const bool implementAcceleration = false;
+  const bool implementAcceleration = true;
   doRawSteps(stepsToMove, jointSigns, implementAcceleration);
 }
 
@@ -508,7 +536,8 @@ void calculateStepDelaysAccel(const int minStepDelay, const int numSteps, std::v
       n--;
       d = (d * (4 * n + 1)) / (4 * n + 1 - 2);
     }
-    delayVector.push_back(d);
+    
+    delayVector.push_back(uint8_t(d));
     //Serial.println(delay_array[i]);  
   }
 }
@@ -663,7 +692,7 @@ void parseCommand()
       }
 
       const bool implementAcceleration = false;
-      const int movementTimeUs = 1000000;
+      const int movementTimeUs = 3000000;
       jogJoints(desiredAngles, implementAcceleration, movementTimeUs); 
       break;
     }
