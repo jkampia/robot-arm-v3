@@ -193,39 +193,224 @@ FUNCTION PARAMS
 desiredJointAngles: array containing each joint's desired angle
 implementAcceleration: whether or not to use acceleration S-curve or static speed, default true
 */
-void jogJoints(const float *desiredJointAngles, bool implementAcceleration = true)
+void jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
 {
   // calculate steps to move to satisfy angle delta
   int stepsToMove[numJoints];
   int jointSigns[numJoints];
   for (int i = 0; i < numJoints; i++) 
   {
-    stepsToMove[i] = (desiredJointAngles[i] - currentJointAngles[i]) * stepsPerRad[i];
-    jointSigns[i] = sign(stepsToMove[i]);
+    float diff = desiredJointAngles[i] - currentJointAngles[i];
+    stepsToMove[i] = abs(diff) * stepsPerRad[i];
+    jointSigns[i] = sign(diff);
   }
 
   printArray("Current joint angles: ", currentJointAngles, numJoints);
   printArray("Desired joint angles: ", desiredJointAngles, numJoints);
   printArray("Steps to move: ",        stepsToMove,        numJoints);
-  printArray("Joint signs:",           jointSigns,         numJoints);
-  
-  
-  setJointDirections(jointSigns);
+  printArray("Joint signs: ",           jointSigns,         numJoints);
+
+  uint32_t startTimeUs = micros();
 
   // do the thing!!
   if (implementAcceleration)
   {
-    goStepsAccel(stepsToMove); 
+    goStepsAccel(stepsToMove, jointSigns); 
+  }
+  else
+  {
+    goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
   }
 
-  // apply movement to joint angles 
-  for (int i = 0; i < numJoints; i++) 
-  {
-    currentJointAngles[i] += stepsToMove[i] * radsPerStep[i];
-  }
+  uint32_t stopTimeUs = micros();
+  float elapsedTimeS = float(stopTimeUs - startTimeUs) / 1000000;
+
+  printArray("Final joint angles: ", currentJointAngles, numJoints);
+  printArray("Final joint steps: ",  currentJointSteps,  numJoints);
+  Serial.println("Jog completed in " + String(elapsedTimeS) + " s");
 
   // solve forward kinematics to update end effector position
   //solve_FK(currentJointAngles, cur_pose);
+}
+
+
+
+bool checkFinished(const int* stepCount, const int* stepsToMove, bool* jointEnableFlags)
+{
+  int activeCount = 0;
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    if (stepCount[i] >= stepsToMove[i])
+    {
+      // this joint is done
+      jointEnableFlags[i] = false;
+    }
+    activeCount += jointEnableFlags[i];
+  }
+
+  //printArray("Joint enable flags: ", jointEnableFlags, numJoints);
+
+  return activeCount == 0; // will only return true if all joints are 0 / false 
+};
+
+
+
+
+void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implementAcceleration)
+{
+  setJointDirections(jointSigns);
+
+  int stepCount[numJoints];
+  unsigned long refTime[numJoints];
+  bool jointEnableFlags[numJoints];
+  for (int i = 0; i < numJoints; i++) 
+  { 
+    stepCount[i] = 0; 
+    jointEnableFlags[i] = true;
+    refTime[i] = micros();
+  }
+
+  while (!checkFinished(stepCount, stepsToMove, jointEnableFlags)) 
+  {
+    // joint 0
+    if (stepsToMove[0] != 0 && jointEnableFlags[0])
+    {
+      auto delay = jointDelays[0].front();
+      if (implementAcceleration) { delay = jointDelays[0][stepCount[0]]; }
+      uint32_t now = micros();
+      uint32_t dt = now - refTime[0];
+      uint32_t half = delay >> 1;
+
+      if (dt > half && dt < delay) 
+      {
+        digitalWriteFast(pul0, HIGH);
+      }
+      else if (dt >= delay)
+      {
+        digitalWriteFast(pul0, LOW);
+        stepCount[0]++; 
+        refTime[0] = now;
+      }
+    }
+
+    // joint 1
+    if (stepsToMove[1] != 0 && jointEnableFlags[1])
+    {
+      auto delay = jointDelays[1].front();
+      if (implementAcceleration) { delay = jointDelays[1][stepCount[1]]; }
+      uint32_t now = micros();
+      uint32_t dt = now - refTime[1];
+      uint32_t half = delay >> 1;
+
+      if (dt > half && dt < delay) 
+      {
+        digitalWriteFast(pul1, HIGH);
+      }
+      else if (dt >= delay)
+      {
+        digitalWriteFast(pul1, LOW);
+        stepCount[1]++; 
+        refTime[1] = now;
+      }
+    }
+
+    // joint 2
+    if (stepsToMove[2] != 0 && jointEnableFlags[2])
+    {
+      auto delay = jointDelays[2].front();
+      if (implementAcceleration) { delay = jointDelays[2][stepCount[2]]; }
+      uint32_t now = micros();
+      uint32_t dt = now - refTime[2];
+      uint32_t half = delay >> 1;
+
+      if (dt > half && dt < delay) 
+      {
+        digitalWriteFast(pul2, HIGH);
+      }
+      else if (dt >= delay)
+      {
+        digitalWriteFast(pul2, LOW);
+        stepCount[2]++; 
+        refTime[2] = now;
+      }
+    }
+
+    // joint 3
+    if (stepsToMove[3] != 0 && jointEnableFlags[3])
+    {
+      auto delay = jointDelays[3].front();
+      if (implementAcceleration) { delay = jointDelays[3][stepCount[3]]; }
+      uint32_t now = micros();
+      uint32_t dt = now - refTime[3];
+      uint32_t half = delay >> 1;
+
+      if (dt > half && dt < delay) 
+      {
+        digitalWriteFast(pul3, HIGH);
+      }
+      else if (dt >= delay)
+      {
+        digitalWriteFast(pul3, LOW);
+        stepCount[3]++; 
+        refTime[3] = now;
+      }
+    }
+
+    // joint 4
+    if (stepsToMove[4] != 0 && jointEnableFlags[4])
+    {
+      auto delay = jointDelays[4].front();
+      if (implementAcceleration) { delay = jointDelays[4][stepCount[4]]; }
+      uint32_t now = micros();
+      uint32_t dt = now - refTime[4];
+      uint32_t half = delay >> 1;
+
+      if (dt > half && dt < delay) 
+      {
+        digitalWriteFast(pul4, HIGH);
+      }
+      else if (dt >= delay)
+      {
+        digitalWriteFast(pul4, LOW);
+        stepCount[4]++; 
+        refTime[4] = now;
+      }
+    }
+  }
+
+  // add # of steps moved to current joint step position
+  // apply movement to joint angles based on actual steps taken
+  // not perceived angular movement
+  for (int i = 0; i < numJoints; i++)
+  {
+    currentJointSteps[i] += stepCount[i] * jointSigns[i];
+    currentJointAngles[i] = currentJointSteps[i] * radsPerStep[i];
+  }
+}
+
+
+
+void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int movementTimeUs)
+{
+  if (movementTimeUs <= 0) 
+  { 
+    Serial.print("Invalid movement time provided: " + String(movementTimeUs));
+    return; 
+  }
+
+  int tempArray[numJoints];
+  for (int i = 0; i < numJoints; i++)
+  {
+    jointDelays[i].clear();
+    jointDelays[i].front() = movementTimeUs / stepsToMove[i];
+    tempArray[i] = jointDelays[i].front();
+  }
+
+  printArray("Joint step delays: ", tempArray, numJoints);
+
+  const bool implementAcceleration = false;
+  doRawSteps(stepsToMove, jointSigns, implementAcceleration);
 }
 
 
@@ -233,7 +418,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
 FUNCTION PARAMS
 stepsToMove: array containing # of steps each joint has to move
 */
-void goStepsAccel(const int *stepsToMove) 
+void goStepsAccel(const int *stepsToMove, const int* jointSigns) 
 {
   float sumTime[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
   //float jointTimeScalar[numJoints] = {0, 0, 0, 0, 0, 0};
@@ -244,7 +429,7 @@ void goStepsAccel(const int *stepsToMove)
     jointDelays[i].clear(); 
     
     // populate jointDelays with new delay values
-    calculateStepDelays(minStepDelay[i], abs(stepsToMove[i]), jointDelays[i]); 
+    calculateStepDelaysAccel(minStepDelay[i], abs(stepsToMove[i]), jointDelays[i]); 
     
     // add up all delays to calculate total movement time (microseconds)
     for (const auto& val : jointDelays[i]) { sumTime[i] += val; }
@@ -282,29 +467,9 @@ void goStepsAccel(const int *stepsToMove)
   }
   // we are all ready to go!
 
-  auto checkFinished = [&]() -> bool
-  {
-    int activeCount = 0;
-
-    for (int i = 0; i < numJoints; i++)
-    {
-      if (stepCount[i] >= stepsToMove[i])
-      {
-        // this joint is done
-        jointEnableFlags[i] = false;
-      }
-      activeCount += jointEnableFlags[i];
-    }
-
-    //printArray("Joint enable flags: ", jointEnableFlags, numJoints);
-
-    return activeCount == 0; // will only return true if all joints are 0 / false 
-  };
-
-
   /* unfortunately this cannot be done in a loop, because the pin numbers have to be #defines or const for digitalWriteFast() :( 
      this is a blocking loop that is super timing-critical */
-  while (!checkFinished()) 
+  while (!checkFinished(stepCount, stepsToMove, jointEnableFlags)) 
   {
     // joint 0
     if (stepsToMove[0] != 0 && jointEnableFlags[0])
@@ -382,6 +547,12 @@ void goStepsAccel(const int *stepsToMove)
     }
   }
 
+  // add # of steps moved to current joint step position
+  for (int i = 0; i < numJoints; i++)
+  {
+    currentJointSteps[i] += stepCount[i] * jointSigns[i];
+  }
+
   Serial.println("Finished movement");
 }
 
@@ -396,7 +567,7 @@ motorIndex: the joint index (0-4)
 numSteps: the number of steps the joint has to move
 delayVector: the joint delay vector to be populated
 */
-void calculateStepDelays(const int minStepDelay, const int numSteps, std::vector<uint8_t>& delayVector) 
+void calculateStepDelaysAccel(const int minStepDelay, const int numSteps, std::vector<uint8_t>& delayVector) 
 { 
   const float angle = 1;
   const float accel = 0.1;
@@ -524,6 +695,28 @@ bool solveIK(const float* targetPose, float* targetJointAngles)
 }
 
 
+
+void jogPositionJointSpace(float* desiredPoseXYZPR)
+{
+  float desiredAngles[numJoints];
+  if (!solveIK(desiredPoseXYZPR, desiredAngles)) return;
+  
+  const bool implementAcceleration = true;
+  jogJoints(desiredAngles, implementAcceleration);
+}
+
+
+
+void jogPositionLinePath(float* desiredPoseXYZPR)
+{
+  float deltaVector[3]; // contains only x, y, z
+  arraySubtract(desiredPoseXYZPR, currentPose, deltaVector, 3);
+  
+  
+}
+
+
+
 /*
 Acts on serialBuffer global array of commands
 */
@@ -543,6 +736,27 @@ void parseCommand()
       break;
     }
 
+    case serialCommand::TGT_ANGLES_JOINT_SPACE:
+    {
+      Serial.println("Received target angle joint space command");
+
+      float desiredAngles[numJoints];
+      memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
+
+      for (int i = 0; i < numJoints; i++)
+      {
+        if (serialBuffer[i+1].length() > 0) 
+        {
+          desiredAngles[i] = serialBuffer[i+1].toFloat();
+        }
+      }
+
+      const bool implementAcceleration = false;
+      const int movementTimeUs = 1000000;
+      jogJoints(desiredAngles, implementAcceleration, movementTimeUs); 
+      break;
+    }
+
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL:
     {
       Serial.println("Received target angle joint space accel command");
@@ -558,9 +772,9 @@ void parseCommand()
           desiredAngles[i] = serialBuffer[i+1].toFloat();
         }
       }
+
       const bool implementAcceleration = true;
       jogJoints(desiredAngles, implementAcceleration);      
-
       break;
     }
 
@@ -587,11 +801,7 @@ void parseCommand()
 
       if (!commandValid) break;
       
-      float desiredAngles[numJoints];
-      if (!solveIK(desiredPoseXYZPR, desiredAngles)) break;
-      
-      const bool implementAcceleration = true;
-      jogJoints(desiredAngles, implementAcceleration);
+      jogPositionJointSpace(desiredPoseXYZPR);
 
       break;
     }
