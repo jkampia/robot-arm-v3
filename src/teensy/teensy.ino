@@ -1,6 +1,8 @@
 // Written by Jonathan Kampia
 // jonathankampia@gmail.com
 
+// stepper motor wiring order: red-blue-green-black
+
 
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
@@ -12,14 +14,17 @@
 
 
 /* joint stuff */
-#define numJoints 5
+constexpr int numJoints = 5; 
 
+constexpr int homeJointSteps[numJoints]    = {0,   0,   0,   0,   0  };
+constexpr float homeJointAngles[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
+constexpr float homePose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
 
-int   currentJointSteps[numJoints]   = {0,   0,   0,   0,   0  };
-float currentJointAngles[numJoints]  = {0.0, 0.0, 0.0, 0.0, 0.0};
-float currentPose[numJoints]         = {0.0, 0.0, 0.0, 0.0, 0.0};
-int   enaFlags[numJoints]            = {1,   1,   1,   1,   1  };
+int   currentJointSteps[numJoints];
+float currentJointAngles[numJoints];
+float currentPose[numJoints];
 
+int   enaFlags[numJoints] = {1, 1, 1, 1, 1};
 
 const float jointLengths[numJoints]  = {100,  300,  250,  50,   50};
 const float gearReduction[numJoints] = {10.0, 10.0, 20.0, 5.0,  1.0};
@@ -55,6 +60,10 @@ void setup()
   for (int i = 0; i < numJoints; i++)
   {
     jointDelays[i].reserve(32000);
+
+    currentJointSteps[i] = homeJointSteps[i];
+    currentJointAngles[i] = homeJointAngles[i];
+    currentPose[i] = homePose[i];
   }
 
   printArray("Joint lengths: ", jointLengths, numJoints);
@@ -427,10 +436,8 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
   {
     // wipe vector, maintains its space in memory
     jointDelays[i].clear(); 
-    
     // populate jointDelays with new delay values
     calculateStepDelaysAccel(minStepDelay[i], abs(stepsToMove[i]), jointDelays[i]); 
-    
     // add up all delays to calculate total movement time (microseconds)
     for (const auto& val : jointDelays[i]) { sumTime[i] += val; }
   }  
@@ -456,104 +463,8 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
     }
   }
 
-  int stepCount[numJoints];
-  unsigned long refTime[numJoints];
-  bool jointEnableFlags[numJoints];
-  for (int i = 0; i < numJoints; i++) 
-  { 
-    stepCount[i] = 0; 
-    jointEnableFlags[i] = true;
-    refTime[i] = micros();
-  }
-  // we are all ready to go!
-
-  /* unfortunately this cannot be done in a loop, because the pin numbers have to be #defines or const for digitalWriteFast() :( 
-     this is a blocking loop that is super timing-critical */
-  while (!checkFinished(stepCount, stepsToMove, jointEnableFlags)) 
-  {
-    // joint 0
-    if (stepsToMove[0] != 0 && jointEnableFlags[0])
-    {
-      if (micros() - refTime[0] > jointDelays[0][stepCount[0]] * 0.5 && micros() - refTime[0] < jointDelays[0][stepCount[0]]) 
-      {
-        digitalWriteFast(pul0, HIGH);
-      }
-      else if (micros() - refTime[0] > jointDelays[0][stepCount[0]]) 
-      {
-        digitalWriteFast(pul0, LOW);
-        stepCount[0]++; 
-        refTime[0] = micros();   
-      }
-    }
-
-    // joint 1
-    if (stepsToMove[1] != 0 && jointEnableFlags[1])
-    {
-      if (micros() - refTime[1] > jointDelays[1][stepCount[1]] * 0.5 && micros() - refTime[1] < jointDelays[1][stepCount[1]]) 
-      {
-        digitalWriteFast(pul1, HIGH);
-      }
-      else if (micros() - refTime[1] > jointDelays[1][stepCount[1]]) 
-      {
-        digitalWriteFast(pul1, LOW);
-        stepCount[1]++; 
-        refTime[1] = micros();   
-      }
-    }
-
-    // joint 2
-    if (stepsToMove[2] != 0 && jointEnableFlags[2])
-    {
-      if (micros() - refTime[2] > jointDelays[2][stepCount[2]] * 0.5 && micros() - refTime[2] < jointDelays[2][stepCount[2]]) 
-      {
-        digitalWriteFast(pul2, HIGH);
-      }
-      else if (micros() - refTime[2] > jointDelays[2][stepCount[2]]) 
-      {
-        digitalWriteFast(pul2, LOW);
-        stepCount[2]++; 
-        refTime[2] = micros();   
-      }
-    }
-
-    // joint 3
-    if (stepsToMove[3] != 0 && jointEnableFlags[3])
-    {
-      if (micros() - refTime[3] > jointDelays[3][stepCount[3]] * 0.5 && micros() - refTime[3] < jointDelays[0][stepCount[3]]) 
-      {
-        digitalWriteFast(pul3, HIGH);
-      }
-      else if (micros() - refTime[3] > jointDelays[3][stepCount[3]]) 
-      {
-        digitalWriteFast(pul3, LOW);
-        stepCount[3]++; 
-        refTime[3] = micros();   
-      }
-    }
-
-    // joint 4
-    if (stepsToMove[4] != 0 && jointEnableFlags[4])
-    {
-      if (micros() - refTime[4] > jointDelays[4][stepCount[4]] * 0.5 && micros() - refTime[4] < jointDelays[4][stepCount[4]]) 
-      {
-        digitalWriteFast(pul4, HIGH);
-      }
-      else if (micros() - refTime[4] > jointDelays[4][stepCount[4]]) 
-      {
-        digitalWriteFast(pul4, LOW);
-        stepCount[4]++; 
-        refTime[4] = micros();   
-      }
-    }
-  }
-
-  // add # of steps moved to current joint step position
-  for (int i = 0; i < numJoints; i++)
-  {
-    currentJointSteps[i] += stepCount[i] * jointSigns[i];
-  }
-
-  Serial.println("Finished movement");
+  const bool implementAcceleration = false;
+  doRawSteps(stepsToMove, jointSigns, implementAcceleration);
 }
 
 
