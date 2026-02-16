@@ -23,3 +23,5 @@
 #define dir4 28
 #define ena4 29
 
+constexpr int ena[numJoints] = {ena0, ena1, ena2, ena3, ena4};
+

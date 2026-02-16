@@ -1,9 +1,9 @@
 // Written by Jonathan Kampia
 // jonathankampia@gmail.com
 
-// stepper motor wiring order: red-blue-green-black
+// stepper motor wiring order: black-green-red-blue
 
-
+#include "joint_info.hpp"
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
 #include "serial_utils.hpp"
@@ -14,28 +14,17 @@
 
 
 /* joint stuff */
-constexpr int numJoints = 5; 
-
-constexpr int homeJointSteps[numJoints]    = {0,   0,   0,   0,   0  };
+constexpr int homeJointSteps[numJoints]    = {0,   0,   0,   0,   0};
 constexpr float homeJointAngles[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
 constexpr float homePose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
 
-int   currentJointSteps[numJoints];
+int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
 
-const int enaPins[numJoints] = {ena0, ena1, ena2, ena3, ena4};
-int   enaFlags[numJoints] = {1, 1, 1, 1, 1};
+int enaFlags[numJoints] = {1, 1, 1, 1, 1};
 
-const float jointLengths[numJoints]  = {100,  300,  250,  50,   50};
-const float gearReduction[numJoints] = {10.0, 10.0, 20.0, 5.0,  1.0};
-const int stepsPerRev[numJoints]     = {3200, 3200, 3200, 3200, 3200};
-const int minStepDelay[numJoints]    = {20,  20,  20,  20,  20};
-
-float stepsPerRad[numJoints];
-float radsPerStep[numJoints];
-float stepsPerDeg[numJoints];
-float degsPerStep[numJoints];
+JointInfo jointInfo[6];
 
 std::vector<uint8_t> jointDelays[numJoints];
 
@@ -43,6 +32,8 @@ std::vector<uint8_t> jointDelays[numJoints];
 /* serial */
 String serialBuffer[serialBufferLength];
 bool newCommand = false;
+
+
 
 
 void setup() 
@@ -86,11 +77,11 @@ void setup()
     currentJointAngles[i] = homeJointAngles[i];
     currentPose[i] = homePose[i];
 
-    digitalWrite(enaPins[i], HIGH);
+    parseEnaFlags(); 
   }
 
-  printArray("Joint lengths: ", jointLengths, numJoints);
-  calculateJointInfo();
+  printArray("Joint lengths: ", limbLengths, numJoints);
+  populateJointInfo();
   printFreeMemory();
 
 
@@ -171,24 +162,26 @@ void fastSerialRead(bool debug)
 /*
 Calculates some constants based on robot arm parameters
 */
-void calculateJointInfo()
+void populateJointInfo()
 {
   for (int i = 0; i < numJoints; i++)
   {
-    int actualStepsPerRev = stepsPerRev[i] * gearReduction[i];
+    jointInfo[i].stepsPerRev = stepsPerRev[i];
+    jointInfo[i].gearReduction = gearReduction[i];
+    jointInfo[i].minStepDelay = minStepDelay[i];
+
+    int actualStepsPerRev = jointInfo[i].stepsPerRev * jointInfo[i].gearReduction;
     
     const float revsPerRad = 1/(2*PI);
 
-    stepsPerRad[i] = actualStepsPerRev * revsPerRad; 
-    radsPerStep[i] = 1 / stepsPerRad[i];
+    jointInfo[i].stepsPerRad = actualStepsPerRev * revsPerRad; 
+    jointInfo[i].radsPerStep = 1 / jointInfo[i].stepsPerRad;
 
     const float revsPerDeg = 1/360.0;
 
-    stepsPerDeg[i] = actualStepsPerRev * revsPerDeg; 
-    degsPerStep[i] = 1 / revsPerDeg;
+    jointInfo[i].stepsPerDeg = actualStepsPerRev * revsPerDeg;
+    jointInfo[i].degsPerStep = 1 /  jointInfo[i].stepsPerDeg;
   }
-
-  printArray("Steps per rad: ", stepsPerRad, numJoints);
 }
 
 
@@ -217,6 +210,17 @@ void setJointDirections(const int *jointSigns)
 
 
 
+void parseEnaFlags()
+{
+  for (int i = 0; i < numJoints; i++)
+  {
+    digitalWrite(ena[i], enaFlags[i]);
+  }
+}
+
+
+
+
 
 
 /* 
@@ -235,7 +239,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   for (int i = 0; i < numJoints; i++) 
   {
     float diff = desiredJointAngles[i] - currentJointAngles[i];
-    stepsToMove[i] = abs(diff) * stepsPerRad[i];
+    stepsToMove[i] = abs(diff) * jointInfo[i].stepsPerRad;
     jointSigns[i] = sign(diff);
   }
 
@@ -421,7 +425,7 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
   for (int i = 0; i < numJoints; i++)
   {
     currentJointSteps[i] += stepCount[i] * jointSigns[i];
-    currentJointAngles[i] = currentJointSteps[i] * radsPerStep[i];
+    currentJointAngles[i] = currentJointSteps[i] * jointInfo[i].radsPerStep;
   }
 }
 
@@ -465,7 +469,7 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
     // wipe vector, maintains its space in memory
     jointDelays[i].clear(); 
     // populate jointDelays with new delay values
-    calculateStepDelaysAccel(minStepDelay[i], abs(stepsToMove[i]), jointDelays[i]); 
+    computeStepDelays(jointInfo[i], abs(stepsToMove[i]), jointDelays[i]); 
     // add up all delays to calculate total movement time (microseconds)
     for (const auto& val : jointDelays[i]) { sumTime[i] += val; }
   }  
@@ -506,12 +510,13 @@ motorIndex: the joint index (0-4)
 numSteps: the number of steps the joint has to move
 delayVector: the joint delay vector to be populated
 */
-void calculateStepDelaysAccel(const int minStepDelay, const int numSteps, std::vector<uint8_t>& delayVector) 
+void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint8_t>& delayVector) 
 { 
+  /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
+  const float t1 = 500 * 1e-6; 
   const float angle = 1;
-  const float accel = 0.1;
-  /* some magic number idk why it's this */
-  const float delay0 = 2000 * sqrt(2 * angle / accel) * 0.67703;
+  const float accel = 0.2;
+  const float delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
 
   float d = delay0;
   int n = 0; 
@@ -522,8 +527,8 @@ void calculateStepDelaysAccel(const int minStepDelay, const int numSteps, std::v
     if (rampUpStepCount == 0) {
       n++; 
       d = d - (2 * d) / (4 * n + 1);
-      if (d <= minStepDelay) {
-        d = minStepDelay; 
+      if (d <= jointInfo.minStepDelay) {
+        d = jointInfo.minStepDelay; 
         rampUpStepCount = i;
         //Serial.println(rampUpStepCount); 
       }
@@ -578,11 +583,11 @@ bool solveIK(const float* targetPose, float* targetJointAngles)
   float theta4 = targetPose[3];
   float theta5 = targetPose[4];
 
-  float l1 = jointLengths[0];
-  float l2 = jointLengths[1];
-  float l3 = jointLengths[2];
-  float l4 = jointLengths[3];
-  float l5 = jointLengths[4];
+  float l1 = limbLengths[0];
+  float l2 = limbLengths[1];
+  float l3 = limbLengths[2];
+  float l4 = limbLengths[3];
+  float l5 = limbLengths[4];
 
   // convert to radians
   //theta4 = m.radians(theta4)
