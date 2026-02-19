@@ -6,8 +6,8 @@
 #include "joint_info.hpp"
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
-#include "serial_utils.hpp"
 #include "math_utils.hpp"
+#include "serial_utils.hpp"
 
 #include <cmath>
 #include <vector>

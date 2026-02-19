@@ -49,7 +49,7 @@ inline bool normalizeVector(float* vector)
       sum += vector[i] * vector[i];
     }
     if (sum <= 1e-12f)   // avoid divide-by-zero
-      { return false; }
+    { return false; }
 
     float invMag = 1.0f / sqrtf(sum);
 
