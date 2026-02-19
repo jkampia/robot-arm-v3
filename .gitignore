@@ -12,6 +12,7 @@ training_data/aug_data/white/*
 training_data/aug_data/empty/*
 
 # Python cache
+venv
 __pycache__/
 *.pyc
 *.pyo
