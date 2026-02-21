@@ -5,7 +5,7 @@ from PIL import Image
 import os
 import cv2
 import numpy as np
-
+from pathlib import Path
 import time
 
 
@@ -558,7 +558,41 @@ class ImageProcessor:
         return savedPaths, numSaves
 
 
+    
+    def occupancyDetectionPipeline(self, originalFrame):
+    
+        detector = OccupancyDetector(
+        model_path="../../training_data/square_classifier.pt",
+        class_names=["black", "empty", "white"]
+        )
 
+        # find most likely chessboard edges
+        boardCorners, edges = self.findLargestQuadrilateral(originalFrame)
+
+        # order
+        boardCorners = self.orderCorners(boardCorners)
+        if boardCorners is None:
+            return None, None
+
+        # draw them onto new frame
+        #edgedFrame = drawBoardEdges(originalFrame, boardCorners)
+
+        #downscale frame
+        #displayImage, scale = downscaleForDisplay(edgedFrame)
+
+        # display that frame
+        #cv2.imshow("large", displayImage)
+
+        #rectify frame
+        rectifiedFrame, homography = self.rectifyBoard(originalFrame, boardCorners)
+
+        # split into cells, draw lines
+        rectifiedFrame, cellRois, cellRects = self.sliceRectifiedBoardIntoCells(rectifiedFrame)
+
+        # detect occupancy of each square
+        rectifiedFrame, predictions = detector.detectOnRectifiedBoard(rectifiedFrame, cellRois, cellRects)
+
+        return rectifiedFrame, predictions
 
 
 
@@ -568,42 +602,17 @@ def main():
     startTime = time.time()
 
     processor = ImageProcessor()
+
+    directory = Path("frame_server")
     
-    detector = OccupancyDetector(
-    model_path="../../training_data/square_classifier.pt",
-    class_names=["black", "empty", "white"]
-    )
+    for imagePath in directory.glob("*.jpg"):
 
-    # ingest image, don't modify this one
-    originalFrame = cv2.imread("frame_server/testframe.jpg")
+        originalFrame = cv2.imread(imagePath)
 
-    # find most likely chessboard edges
-    boardCorners, edges = processor.findLargestQuadrilateral(originalFrame)
+        rectifiedFrame, predictions = processor.occupancyDetectionPipeline(originalFrame)
 
-    # order
-    boardCorners = processor.orderCorners(boardCorners)
-
-    # draw them onto new frame
-    #edgedFrame = drawBoardEdges(originalFrame, boardCorners)
-
-    #downscale frame
-    #displayImage, scale = downscaleForDisplay(edgedFrame)
-
-    # display that frame
-    #cv2.imshow("large", displayImage)
-
-    #rectify frame
-    rectifiedFrame, homography = processor.rectifyBoard(originalFrame, boardCorners)
-
-    # split into cells, draw lines
-    rectifiedFrame, cellRois, cellRects = processor.sliceRectifiedBoardIntoCells(rectifiedFrame)
-
-    # detect occupancy of each square
-    rectifiedFrame, predictions = detector.detectOnRectifiedBoard(rectifiedFrame, cellRois, cellRects)
-
-    # display rectified frame
-    cv2.imshow("rectified", rectifiedFrame) 
-
+        # display rectified frame
+        cv2.imshow(str(imagePath), rectifiedFrame) 
 
     stopTime = time.time()
     print(f"Time elapsed: {stopTime-startTime} s")
