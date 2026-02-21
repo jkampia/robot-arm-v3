@@ -447,6 +447,9 @@ def main():
     cv2.imshow("rectified", rectifiedFrame)
 
 
+    
+
+
     stopTime = time.time()
     print(f"Time elapsed: {stopTime-startTime} s")
 
