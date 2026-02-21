@@ -4,12 +4,26 @@ install/
 log/
 
 # training data (images)
-training_data/black/*
-training_data/white/*
-training_data/empty/*
+
+training_data/original_data/*
+
+!training_data/original_data/.gitkeep
+
+training_data/sorted_data/black/*
+training_data/sorted_data/white/*
+training_data/sorted_data/empty/*
+
+!training_data/sorted_data/black/.gitkeep
+!training_data/sorted_data/white/.gitkeep
+!training_data/sorted_data/empty/.gitkeep
+
 training_data/aug_data/black/*
 training_data/aug_data/white/*
 training_data/aug_data/empty/*
+
+!training_data/aug_data/black/.gitkeep
+!training_data/aug_data/white/.gitkeep
+!training_data/aug_data/empty/.gitkeep
 
 # Python cache
 venv

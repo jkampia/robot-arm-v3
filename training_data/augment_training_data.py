@@ -65,7 +65,6 @@ if __name__ == "__main__":
     what the image contains!
     """
 
-    print("balls")
     #augment_dataset("empty", "aug_data/empty", num_augments=5)
-    augment_dataset("white", "aug_data/white", num_augments=5)
-    augment_dataset("black", "aug_data/black", num_augments=5)
+    augment_dataset("/sorted_data/white", "aug_data/white", num_augments=5)
+    augment_dataset("/sorted_data/black", "aug_data/black", num_augments=5)

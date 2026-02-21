@@ -2,11 +2,11 @@ import os
 import cv2
 import shutil
 
-src_dir = "original"
+src_dir = "original_data"
 dst_dirs = {
-    'e': "empty",
-    'w': "white",
-    'b': "black"
+    'e': "sorted_data/empty",
+    'w': "sorted_data/white",
+    'b': "sorted_data/black"
 }
 
 for d in dst_dirs.values():
