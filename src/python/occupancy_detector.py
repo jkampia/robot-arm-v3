@@ -55,7 +55,7 @@ class OccupancyDetector:
             pred_idx = torch.argmax(logits, dim=1).item()
             return self.class_names[pred_idx]
         
-    def predict_cv(self, cv_img):
+    def predictCV(self, cv_img):
 
         # Convert BGR (OpenCV) → RGB (PIL)
         rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -68,6 +68,47 @@ class OccupancyDetector:
             logits = self.model(x)
             pred_idx = torch.argmax(logits, dim=1).item()
             return self.class_names[pred_idx]
+
+    
+    def detectOnRectifiedBoard(
+        self,
+        rectifiedFrame,
+        cellRois,
+        cellRects,
+    ):
+        circleRadiusScale = 0.28
+        lineThickness = 3
+
+        if len(cellRois) != 64 or len(cellRects) != 64:
+            raise ValueError(f"Expected 64 ROIs and rects, got {len(cellRois)} and {len(cellRects)}")
+
+        annotatedFrame = rectifiedFrame.copy()
+        predictions = []
+
+        for idx, (roi, rect) in enumerate(zip(cellRois, cellRects)):
+            x, y, w, h = rect
+            cx = int(x + w / 2)
+            cy = int(y + h / 2)
+            cellMin = max(1, int(min(w, h)))
+
+            label = self.predictCV(roi)
+
+            predictions.append(label)
+
+            if label == "white":
+                radius = int(cellMin * float(circleRadiusScale))
+                radius = max(2, radius)
+                cv2.circle(annotatedFrame, (cx, cy), radius, (255, 255, 255), -1, lineType=cv2.LINE_AA)
+                #cv2.circle(annotatedFrame, (cx, cy), radius, (0, 0, 0), lineThickness, lineType=cv2.LINE_AA)
+
+            elif label == "black":
+                radius = int(cellMin * float(circleRadiusScale))
+                radius = max(2, radius)
+                cv2.circle(annotatedFrame, (cx, cy), radius, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+
+            # else: empty -> draw nothing
+
+        return annotatedFrame, predictions
 
 
 
@@ -428,7 +469,7 @@ class ImageProcessor:
 
 
 
-    def saveRoisToDirectory(self, cellRois, outputDir, jpegQuality=95, prefix="cell"):
+    def saveRoisToDirectoryJPG(self, cellRois, outputDir, jpegQuality=95, prefix="cell"):
         """
         Save each ROI as a JPG image in the specified directory.
 
@@ -474,6 +515,51 @@ class ImageProcessor:
 
 
 
+    def saveRoisToDirectoryPNG(self, cellRois, outputDir, pngCompression=3, prefix="cell"):
+        """
+        Save each ROI as a PNG image in the specified directory.
+
+        Args:
+            cellRois: list of 64 ROI images (row-major order)
+            outputDir: directory path to save images
+            pngCompression: 0..9 (0 fastest/largest, 9 smallest/slowest)
+            prefix: filename prefix
+
+        Returns:
+            savedPaths: list of full file paths written
+        """
+        if len(cellRois) != 64:
+            raise ValueError(f"Expected 64 ROIs, got {len(cellRois)}")
+
+        os.makedirs(outputDir, exist_ok=True)
+
+        numSaves = 0
+        savedPaths = []
+
+        for idx, roi in enumerate(cellRois):
+            row = idx // 8
+            col = idx % 8
+
+            filename = f"{prefix}_r{row}_c{col}.png"
+            fullPath = os.path.join(outputDir, filename)
+
+            success = cv2.imwrite(
+                fullPath,
+                roi,
+                [cv2.IMWRITE_PNG_COMPRESSION, int(pngCompression)]
+            )
+
+            if success:
+                savedPaths.append(fullPath)
+                numSaves += 1
+            else:
+                print(f"Failed to save {fullPath}")
+
+        return savedPaths, numSaves
+
+
+
+
 
 
 
@@ -482,6 +568,11 @@ def main():
     startTime = time.time()
 
     processor = ImageProcessor()
+    
+    detector = OccupancyDetector(
+    model_path="../../training_data/square_classifier.pt",
+    class_names=["black", "empty", "white"]
+    )
 
     # ingest image, don't modify this one
     originalFrame = cv2.imread("frame_server/testframe.jpg")
@@ -504,8 +595,11 @@ def main():
     #rectify frame
     rectifiedFrame, homography = processor.rectifyBoard(originalFrame, boardCorners)
 
-    # draw cells
+    # split into cells, draw lines
     rectifiedFrame, cellRois, cellRects = processor.sliceRectifiedBoardIntoCells(rectifiedFrame)
+
+    # detect occupancy of each square
+    rectifiedFrame, predictions = detector.detectOnRectifiedBoard(rectifiedFrame, cellRois, cellRects)
 
     # display rectified frame
     cv2.imshow("rectified", rectifiedFrame) 

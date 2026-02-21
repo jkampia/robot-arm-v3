@@ -12,7 +12,7 @@ BATCH_SIZE = 32
 EPOCHS = 10
 LR = 1e-3
 IMG_SIZE = 64  # assuming square crops
-
+MODEL_NAME = "square_classifier.pt"
 
 
 # -------- TRANSFORMS --------
@@ -92,5 +92,5 @@ for epoch in range(EPOCHS):
     print(f"             Val acc: {val_acc:.4f}")
 
 # -------- SAVE MODEL --------
-torch.save(model.state_dict(), "chess_square_classifier.pt")
-print("✅ Model saved as 'chess_square_classifier.pt'")
+torch.save(model.state_dict(), MODEL_NAME)
+print(f"Model saved as {MODEL_NAME}")

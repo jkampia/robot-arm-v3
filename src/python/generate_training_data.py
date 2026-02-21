@@ -16,7 +16,7 @@ def main():
     
     for frame in frames:
         cellRois = processor.rectifiedRoiPipeline(frame)
-        _, numSaves = processor.saveRoisToDirectory(cellRois, "../../training_data/original_data", prefix = f"frame{n}")
+        _, numSaves = processor.saveRoisToDirectoryPNG(cellRois, "../../training_data/original_data", prefix = f"frame{n}")
         print(f"Saved {numSaves} tiles from frame {n}")
         n += 1
 
