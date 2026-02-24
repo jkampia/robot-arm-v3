@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 
 from chessarm_colors import COLOR_RGB
+from frame_server.request_frame import FrameRequester
+from vision import ImageProcessor, CalibrationHelper
 
 
 class ChessarmDisplay:
@@ -19,6 +21,13 @@ class ChessarmDisplay:
         cv2.resizeWindow(self.windowName, 1280, 960)
 
         self.frameCount = 0
+
+        self.displayTiles = [None, None, None, None]
+        self.displayTitles = [None, None, None, None]
+
+        self.frameRequester = FrameRequester()
+        self.imageProcessor = ImageProcessor()
+        self.calibrationHelper = CalibrationHelper()
 
 
 
@@ -114,49 +123,83 @@ class ChessarmDisplay:
 
         return canvas
 
+
     
+
+    def embedInTile(self, frame, size=480):
+
+        canvas = np.zeros((size, 640, 3), dtype=np.uint8)
+        x_offset = (640 - size) // 2 # center board square inside (preserve aspect ratio)
+        canvas[:, x_offset:x_offset + size] = frame
+
+        return canvas
+
+    
+
 
     def createDisplayOutput(
         self,
         gap=60,
         margin=60,
         bg="cream",
-        titles=("frame capture", "detected colors", "template", "board state"),
-        titleYOffset=-40,          # pixels down from the top edge of each tile
-        titleXPadding=0,           # extra x padding (usually keep 0)
+        titles=("raw frame capture", "detected colors", "template", "board state"),
+        titleYOffset=-40,
+        titleXPadding=0,
     ):
-    
         tileH, tileW = 480, 640
 
         def rgbToBgr(rgbTuple):
             return rgbTuple[::-1]
 
+        tileBgr = rgbToBgr(COLOR_RGB["green"])
         bgBgr = rgbToBgr(COLOR_RGB[bg])
 
-        # create 4 tiles
-        # [img1, img2]
-        # [img3, img4]
-        img1 = np.zeros((tileH, tileW, 3), dtype=np.uint8)
+        def blank_tile():
+            return np.full((tileH, tileW, 3), tileBgr, dtype=np.uint8)
 
-        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-        img2 = self.frameBlobChessboard(fen)
+        def normalize_tile(tile):
+            # None -> blank
+            if tile is None:
+                return blank_tile()
 
-        img3 = np.zeros((tileH, tileW, 3), dtype=np.uint8)
+            tile = np.asarray(tile)
 
-        img4 = self.frameEmptyChessboard()
+            # empty or 1D -> blank (this is the exact error you hit)
+            if tile.size == 0 or tile.ndim == 1:
+                return blank_tile()
 
-        # color overrides for template frames
-        img1[:] = rgbToBgr(COLOR_RGB["blue"])
-        #img2[:] = rgbToBgr(COLOR_RGB["green"])
-        img3[:] = rgbToBgr(COLOR_RGB["red"])
-        #img4[:] = rgbToBgr(COLOR_RGB["cyan"])
+            # grayscale -> BGR
+            if tile.ndim == 2:
+                tile = cv2.cvtColor(tile, cv2.COLOR_GRAY2BGR)
+
+            # BGRA -> BGR
+            if tile.ndim == 3 and tile.shape[2] == 4:
+                tile = cv2.cvtColor(tile, cv2.COLOR_BGRA2BGR)
+
+            # ensure uint8
+            if tile.dtype != np.uint8:
+                tile = np.clip(tile, 0, 255).astype(np.uint8)
+
+            # resize to tile size if needed
+            if tile.shape[0] != tileH or tile.shape[1] != tileW:
+                tile = cv2.resize(tile, (tileW, tileH), interpolation=cv2.INTER_NEAREST)
+
+            # final sanity: must be HxWx3
+            if tile.ndim != 3 or tile.shape[2] != 3:
+                return blank_tile()
+
+            return tile
+
+        # IMPORTANT: write back into the list
+        for i in range(len(self.displayTiles)):
+            self.displayTiles[i] = normalize_tile(self.displayTiles[i])
 
         # build grid with gaps
         verticalGap = np.full((tileH, gap, 3), bgBgr, dtype=np.uint8)
         horizontalGap = np.full((gap, 2 * tileW + gap, 3), bgBgr, dtype=np.uint8)
 
-        topRow = np.hstack((img1, verticalGap, img2))
-        bottomRow = np.hstack((img3, verticalGap, img4))
+        topRow = np.hstack((self.displayTiles[0], verticalGap, self.displayTiles[1]))
+        bottomRow = np.hstack((self.displayTiles[2], verticalGap, self.displayTiles[3]))
         grid = np.vstack((topRow, horizontalGap, bottomRow))
 
         # add outer margin
@@ -167,61 +210,30 @@ class ChessarmDisplay:
         else:
             canvas = grid
 
-        # frame title specs
+        # titles
         font = cv2.FONT_HERSHEY_SIMPLEX
         fontScale = 1.2
         thickness = 2
-        textColor = (0, 0, 0)  # black
+        textColor = (0, 0, 0)
 
-        # tile top left corners in final canvas
-        x0 = margin
-        y0 = margin
-
-        x1 = x0 + tileW + gap
-        y1 = y0
-
-        x2 = x0
-        y2 = y0 + tileH + gap
-
-        x3 = x1
-        y3 = y2
-
+        x0, y0 = margin, margin
+        x1, y1 = x0 + tileW + gap, y0
+        x2, y2 = x0, y0 + tileH + gap
+        x3, y3 = x1, y2
         tileOrigins = [(x0, y0), (x1, y1), (x2, y2), (x3, y3)]
 
         for title, (tileX, tileY) in zip(titles, tileOrigins):
             if title is None:
                 continue
-
             textSize = cv2.getTextSize(title, font, fontScale, thickness)[0]
-
             textX = tileX + (tileW - textSize[0]) // 2 + titleXPadding
-            textY = tileY + titleYOffset + textSize[1]  # baseline positioning
-
-            cv2.putText(
-                canvas,
-                title,
-                (textX, textY),
-                font,
-                fontScale,
-                textColor,
-                thickness,
-                cv2.LINE_AA
-            )
-
-        canvasH, canvasW = canvas.shape[:2]
+            textY = tileY + titleYOffset + textSize[1]
+            cv2.putText(canvas, title, (textX, textY), font, fontScale, textColor, thickness, cv2.LINE_AA)
 
         self.frameCount += 1
-
-        cv2.putText(
-                canvas,
-                f"board update: {self.frameCount}",
-                (20, canvasH-20),
-                font,
-                fontScale,
-                textColor,
-                thickness,
-                cv2.LINE_AA
-            )
+        canvasH, _ = canvas.shape[:2]
+        cv2.putText(canvas, f"board update: {self.frameCount}", (20, canvasH - 20),
+                    font, fontScale, textColor, thickness, cv2.LINE_AA)
 
         return canvas
 
@@ -229,17 +241,25 @@ class ChessarmDisplay:
 
     def runStepLoop(self):
 
-        frame = self.createDisplayOutput()
-        cv2.imshow(self.windowName, frame)
+        displayFrame = self.createDisplayOutput()
+        cv2.imshow(self.windowName, displayFrame)
 
         while True:
 
             key = cv2.waitKey(0) & 0xFF  # wait for key input
 
             if key == ord(' ') or key == 32 :  # spacebar
-                print("key:", key)
-                frame = self.createDisplayOutput()
-                cv2.imshow(self.windowName, frame)
+
+                originalFrame = self.frameRequester.requestFrameToMat()
+                self.displayTiles[0] = originalFrame.copy()
+
+                boardCorners = self.calibrationHelper.readCalibrationFromFile("board_corners.txt")
+                rectifiedFrame, predictions = self.imageProcessor.occupancyDetectionPipeline(originalFrame, boardCorners)
+                rectifiedFrame, scale = self.imageProcessor.downscaleForDisplay(rectifiedFrame, max_width=480, max_height=480)
+                self.displayTiles[1] = self.embedInTile(rectifiedFrame)
+
+                displayFrame = self.createDisplayOutput()
+                cv2.imshow(self.windowName, displayFrame)
 
             elif key == ord('q') or key == 27:  # q or ESC -> quit
                 break
@@ -257,8 +277,8 @@ class ChessarmDisplay:
 
 def main():
 
-    display = ChessarmDisplay()
-    display.runStepLoop()
+    chessarmDisplay = ChessarmDisplay()
+    chessarmDisplay.runStepLoop()
 
 
 
