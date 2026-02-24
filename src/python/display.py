@@ -4,7 +4,7 @@ import cairosvg
 import cv2
 import numpy as np
 
-from chessarm_colors import COLOR_RGB
+from colors import COLOR_RGB
 from frame_server.request_frame import FrameRequester
 from vision import ImageProcessor, CalibrationHelper
 
