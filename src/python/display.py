@@ -258,6 +258,8 @@ class ChessarmDisplay:
                 rectifiedFrame, scale = self.imageProcessor.downscaleForDisplay(rectifiedFrame, max_width=480, max_height=480)
                 self.displayTiles[1] = self.embedInTile(rectifiedFrame)
 
+                self.displayTiles[3] = self.frameEmptyChessboard()
+
                 displayFrame = self.createDisplayOutput()
                 cv2.imshow(self.windowName, displayFrame)
 
