@@ -383,30 +383,6 @@ class VisionHelper(Node):
 
         return squares, contours
 
-    
-    def decideSquareOccupancy(self, square_img, contour, idx):
-        
-        gray = cv2.cvtColor(square_img, cv2.COLOR_BGR2GRAY)
-
-        thresh = cv2.adaptiveThreshold(gray, 255,
-                                    cv2.ADAPTIVE_THRESH_MEAN_C,
-                                    cv2.THRESH_BINARY_INV, 11, 3)
-
-        white_pixels = cv2.countNonZero(thresh)
-        total_pixels = thresh.shape[0] * thresh.shape[1]
-        fill_ratio = white_pixels / total_pixels
-        print(f"Fill ratio at square {idx}: {fill_ratio:.2f}")
-
-        occupation_threshold = 0.05  # tweak this threshold empirically
-        if fill_ratio < occupation_threshold:
-            return # No piece detected
-        
-        # If we reach here, a piece is decidedly present
-        avg_intensity = np.mean(gray)
-        piece_color = 'white' if avg_intensity > 127 else 'black'
-        self.markSquareStatus(square_img, contour, piece_color)
-
-
 
 
     def markSquareStatus(self, image, contour, piece_color=None):

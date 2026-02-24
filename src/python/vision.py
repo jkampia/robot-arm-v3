@@ -9,6 +9,9 @@ from pathlib import Path
 import time
 
 
+from frame_server.request_frame import FrameRequester
+
+
 class TinyCNN(nn.Module):
 
     def __init__(self, num_classes=3, img_size=64):
@@ -115,7 +118,12 @@ class OccupancyDetector:
 class ImageProcessor:
 
 
+
     def orderCorners(self, pts):
+
+        if pts is None:
+            return
+
         """Order 4 points as: top-left, top-right, bottom-right, bottom-left."""
         pts = np.array(pts, dtype=np.float32)
         s = pts.sum(axis=1)
@@ -213,13 +221,27 @@ class ImageProcessor:
         minArea = imageArea * float(minAreaFraction)  # e.g., 5% of image
 
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        edges = cv2.Canny(gray, 50, 150)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        g = clahe.apply(gray)
+
+        gray = cv2.GaussianBlur(g, (5, 5), 0)
+
+        v = np.median(g)
+        sigma = 0.5
+        lower = int(max(0, (1.0 - sigma) * v))
+        upper = int(min(255, (1.0 + sigma) * v))
+        
+        edges = cv2.Canny(g, 30, 100)
+        edges = cv2.dilate(edges, np.ones((3,3), np.uint8), iterations=1)
 
         # Close gaps in edges so the board outline forms one contour
         kernel = np.ones((5, 5), np.uint8)
         edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        #small, scale = self.downscaleForDisplay(edges)
+        #cv2.imshow("edges", small)
+        #key = cv2.waitKey(0) & 0xFF  # wait for key input
 
         # Find contours (RETR_EXTERNAL is OK, RETR_LIST can sometimes help if outline isn't outermost)
         cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -411,51 +433,6 @@ class ImageProcessor:
 
 
 
-
-    def visualizeAverageColors(self, cellRois, outputSize=800):
-        """
-        Create an 8x8 visualization image where each square is filled
-        with the average color of the corresponding ROI.
-
-        Args:
-            cellRois: list of 64 ROI images (row-major order)
-            outputSize: size of output square image (default 800x800)
-
-        Returns:
-            colorImage: 800x800 BGR image
-            avgColors: list of 64 average BGR colors
-        """
-        if len(cellRois) != 64:
-            raise ValueError(f"Expected 64 ROIs, got {len(cellRois)}")
-
-        cellSize = outputSize // 8
-        colorImage = np.zeros((outputSize, outputSize, 3), dtype=np.uint8)
-
-        avgColors = []
-
-        for idx, roi in enumerate(cellRois):
-            if roi.size == 0:
-                avgColor = np.array([0, 0, 0], dtype=np.uint8)
-            else:
-                # Compute mean per channel (BGR)
-                meanBgr = np.mean(roi.reshape(-1, roi.shape[-1]), axis=0)
-                avgColor = np.clip(meanBgr, 0, 255).astype(np.uint8)
-
-            avgColors.append(avgColor)
-
-            row = idx // 8
-            col = idx % 8
-
-            y0 = row * cellSize
-            y1 = (row + 1) * cellSize
-            x0 = col * cellSize
-            x1 = (col + 1) * cellSize
-
-            colorImage[y0:y1, x0:x1] = avgColor
-
-        return colorImage, avgColors
-
-
     
 
     def rectifiedRoiPipeline(self, originalFrame):
@@ -559,29 +536,20 @@ class ImageProcessor:
 
 
     
-    def occupancyDetectionPipeline(self, originalFrame):
+    def occupancyDetectionPipeline(self, originalFrame, boardCorners):
     
         detector = OccupancyDetector(
         model_path="../../training_data/square_classifier.pt",
         class_names=["black", "empty", "white"]
         )
 
-        # find most likely chessboard edges
-        boardCorners, edges = self.findLargestQuadrilateral(originalFrame)
+        #boardCorners, edges = self.findLargestQuadrilateral(originalFrame)
+        #print(boardCorners)
 
         # order
         boardCorners = self.orderCorners(boardCorners)
         if boardCorners is None:
             return None, None
-
-        # draw them onto new frame
-        #edgedFrame = drawBoardEdges(originalFrame, boardCorners)
-
-        #downscale frame
-        #displayImage, scale = downscaleForDisplay(edgedFrame)
-
-        # display that frame
-        #cv2.imshow("large", displayImage)
 
         #rectify frame
         rectifiedFrame, homography = self.rectifyBoard(originalFrame, boardCorners)
@@ -592,27 +560,122 @@ class ImageProcessor:
         # detect occupancy of each square
         rectifiedFrame, predictions = detector.detectOnRectifiedBoard(rectifiedFrame, cellRois, cellRects)
 
+
         return rectifiedFrame, predictions
+
+
+
+
+
+
+class CalibrationHelper:
+
+
+    def writeCalibrationToFile(self, pts, filename='calibration.txt'):
+        if pts is not None:
+            with open(filename, 'w') as f:
+                for pt in pts:
+                    f.write(f"{pt[0]},{pt[1]}\n")
+
+    
+
+    def readCalibrationFromFile(self, filename='calibration.txt'):
+        try:
+            with open(filename, 'r') as f:
+                pts = [tuple(map(int, line.strip().split(','))) for line in f.readlines()]
+                return pts
+        except FileNotFoundError:
+            self.get_logger().error(f"Calibration file '{filename}' not found or is empty. Please calibrate the camera first.")
+            return None
+
+
+
+    def collectManualChessboardCorners(self, frame, window_name="Select 4 points", timeout_ms=None):
+        """
+        Displays `frame`, waits for 4 left-clicks, returns Nx2 int array of (x,y).
+        Right-click = undo last point. Esc = cancel -> returns None.
+        If timeout_ms is set, cancels after that many milliseconds.
+        """
+        img = frame.copy()
+        pts = []
+
+        def on_click(event, x, y, flags, userdata):
+            nonlocal img, pts
+            if event == cv2.EVENT_LBUTTONDOWN:
+                if len(pts) < 4:
+                    pts.append((x, y))
+            elif event == cv2.EVENT_RBUTTONDOWN:
+                if pts:
+                    pts.pop()
+
+            # redraw overlay
+            img = frame.copy()
+            for i, (px, py) in enumerate(pts):
+                cv2.circle(img, (px, py), 5, (0, 0, 255), -1)
+                cv2.putText(img, str(i+1), (px+6, py-6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            if len(pts) >= 2:
+                for a in range(len(pts)-1):
+                    cv2.line(img, pts[a], pts[a+1], (0, 255, 0), 2)
+
+            cv2.imshow(window_name, img)
+
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, frame.shape[1], frame.shape[0])
+        cv2.setMouseCallback(window_name, on_click)
+        cv2.imshow(window_name, img)
+
+        start = cv2.getTickCount()
+        while True:
+            key = cv2.waitKey(20) & 0xFF
+            if len(pts) == 4:
+                break
+            if key == 27:  # Esc
+                pts = None
+                break
+            if timeout_ms is not None:
+                elapsed_ms = (cv2.getTickCount() - start) / cv2.getTickFrequency() * 1000.0
+                if elapsed_ms > timeout_ms:
+                    pts = None
+                    break
+
+        cv2.destroyWindow(window_name)
+        return None if pts is None else np.array(pts, dtype=int)
+
 
 
 
 
 def main():
 
+    # demo of how to use the pipeline
+
     startTime = time.time()
 
-    processor = ImageProcessor()
+    imageProcessor = ImageProcessor()
+    calibrationHelper = CalibrationHelper()
+    frameRequester = FrameRequester()
 
-    directory = Path("frame_server")
-    
-    for imagePath in directory.glob("*.jpg"):
+    originalFrame = frameRequester.requestFrameToMat()
+    boardCorners = calibrationHelper.readCalibrationFromFile("board_corners.txt")
 
-        originalFrame = cv2.imread(imagePath)
+    rectifiedFrame, predictions = imageProcessor.occupancyDetectionPipeline(originalFrame, boardCorners)
 
-        rectifiedFrame, predictions = processor.occupancyDetectionPipeline(originalFrame)
+    cv2.imshow("board occupancy", rectifiedFrame) 
 
-        # display rectified frame
-        cv2.imshow(str(imagePath), rectifiedFrame) 
+#    directory = Path("frame_server")
+#    
+#    for imagePath in directory.glob("*.jpg"):
+#    
+#        originalFrame = cv2.imread(imagePath)
+#   
+#        rectifiedFrame, predictions, edgedFrame = processor.occupancyDetectionPipeline(originalFrame)
+#
+#        # display rectified frame
+#        cv2.imshow(str(imagePath), rectifiedFrame) 
+#        cv2.imshow(f"{str(imagePath)} edges", edgedFrame) 
+
+
 
     stopTime = time.time()
     print(f"Time elapsed: {stopTime-startTime} s")
