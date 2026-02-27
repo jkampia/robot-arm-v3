@@ -11,6 +11,12 @@ PORT = 9000
 
 class FrameRequester:
 
+    def __init__(self):
+
+        self.lastresponse = None
+
+
+
     def recvn(self, sock, n):
         data = b""
         while len(data) < n:
@@ -76,16 +82,21 @@ class FrameRequester:
             image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
             if image is None:
+                self.lastResponse = "bad image"
                 raise RuntimeError("Failed to decode JPEG payload")
+            
+            self.lastResponse = "good"
 
             return image
 
         except socket.timeout:
             print("Frame request timed out")
+            self.lastResponse = "timeout"
             return None
 
         except (ConnectionRefusedError, OSError) as e:
             print(f"Connection error: {e}")
+            self.lastResponse = "connection refused"
             return None
 
         finally:

@@ -2,55 +2,55 @@
 
 import math as m
 import numpy as np
+import json
 
 from enum import Enum
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-
 from itertools import product
 
-from .chessarm_colors import COLOR_RGB, pickRandomColor
+from colors import COLOR_RGB, pickRandomColor
 
 np.set_printoptions(suppress=True, precision=2)
-
-class ARM_INFO(Enum):
-
-    JOINT_SPACE = 0
-    PATH_SPACE = 1
 
 
 class ARM_5DOF:
 
 
-    def __init__(self, joint_params, init_angles):
-
-        if len(joint_params) < 5:
-            raise Exception("Please provide all (5) limb lengths")
+    def __init__(self):
         
-        self.joint_params = joint_params
-        self.home_angles = init_angles.copy()
-        self.joint_angles = init_angles.copy()
-        self.joint_coordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
-        self.joint_coordinates_m = [[0.0, 0.0, 0.0], [], [], [], [], []] # non default m
-        self.joint_colors = [COLOR_RGB["red"], COLOR_RGB["green"], COLOR_RGB["blue"], COLOR_RGB["orange"], COLOR_RGB["purple"], COLOR_RGB["cyan"]]
-        
-        self.path_points = []
-        self.sliced_path_points = []
-        self.path_angles = []
-        self.sliced_path_angles = []
+        linkLengths = [100, 100, 100, 100, 100]
+        initialAngles = [0.0, 0.0, 0.0, 0.0, 0.0]
 
-        self.movement_type = ARM_INFO.JOINT_SPACE  # default movement type
-        
-        self.path_resolution = 0.1  # default path resolution in mm
-        self.path_speed = 300  # default path speed in mm/s
-        self.update_delay = self.path_resolution / self.path_speed * 1000  # in milliseconds
+        self.homeAngles = initialAngles.copy()
 
-        self.dh_params = {}
-        self.dh_params["alpha"] = [m.pi/2, 0.0, 0.0, m.pi/2, 0.0]
-        self.dh_params["d"] = [joint_params[0], 0.0, 0.0, 0.0, joint_params[3] + joint_params[4]]
-        self.dh_params["a"] = [0.0, joint_params[1], joint_params[2], 0.0, 0.0]
+        self.jointAngles = initialAngles.copy()
+        self.jointCoordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
+        self.jointCoordinatesM = [[0.0, 0.0, 0.0], [], [], [], [], []] # non default m
+
+        self.dhParams = {}
+        self.dhParams["alpha"] = [m.pi/2, 0.0, 0.0, m.pi/2, 0.0]
+        self.dhParams["d"] = [linkLengths[0], 0.0, 0.0, 0.0, linkLengths[3] + linkLengths[4]]
+        self.dhParams["a"] = [0.0, linkLengths[1], linkLengths[2], 0.0, 0.0]
+
+        self.status = "ready"
+
+
+    def stateToDict(self):
+        return {
+            "type": "robot_state",
+            
+            "home_angles_rad": self.homeAngles,
+
+            "joint_angles_rad": self.jointAngles,
+
+            "joint_coordinates_m": self.jointCoordinatesM,
+
+            "status": self.status,
+        }
     
+
+    def toJSON(self):
+        return json.dumps(self.stateToDict, indent=4)
 
     def printArrayPretty(self, array):
         print(' '.join(f"{val:6.2f}" for val in array))
@@ -71,10 +71,10 @@ class ARM_5DOF:
     def tfMatrix(self, i):
 
         # extract variables from dict for verbosity
-        theta = self.dh_params["theta"][i]
-        alpha = self.dh_params["alpha"][i]
-        a = self.dh_params["a"][i]
-        d = self.dh_params["d"][i]
+        theta = self.dhParams["theta"][i]
+        alpha = self.dhParams["alpha"][i]
+        a = self.dhParams["a"][i]
+        d = self.dhParams["d"][i]
 
         # from standard layout of denavit-hartenburg matrix
         return np.array([[m.cos(theta), -m.sin(theta)*m.cos(alpha), m.sin(theta)*m.sin(alpha), a*m.cos(theta)], 
@@ -83,31 +83,31 @@ class ARM_5DOF:
                          [0.0, 0.0, 0.0, 1.0]])
 
 
-    def solveFK(self, joint_angles):
+    def solveFK(self, jointAngles):
 
         # set 'theta' field of dh matrix
-        self.dh_params["theta"] = joint_angles
-        joint_coordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
+        self.dhParams["theta"] = jointAngles
+        jointCoordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
         
         # generate tf matrices
         product = self.tfMatrix(0)
-        joint_coordinates[1] = self.extractCoordinates(product)
+        jointCoordinates[1] = self.extractCoordinates(product)
         for i in range(1, 5):
             product = np.matmul(product, self.tfMatrix(i))
-            joint_coordinates[i+1] = self.extractCoordinates(product) 
+            jointCoordinates[i+1] = self.extractCoordinates(product) 
         
-        #self.printMatrixPretty(self.joint_coordinates_m)
-        return joint_coordinates
+        #self.printMatrixPretty(self.jointCoordinatesM)
+        return jointCoordinates
         
     
     # geometric 5DOF inverse kinematics solver
     # assumes that the target pose is in the form of [x, y, z, theta4, theta5]
     # where theta4 is given WRT world horizonal frame (xy plane)
     # example: wrist straight down would be theta4 = -90 degrees
-    def solveIK(self, target_pose):
+    def solveIK(self, targetPose):
         # unpack inputs for clarity
-        x, y, z, theta4, theta5 = target_pose
-        l1, l2, l3, l4, l5 = self.joint_params
+        x, y, z, theta4, theta5 = targetPose
+        l1, l2, l3, l4, l5 = self.linkLengths
 
         # convert to radians
         theta4 = m.radians(theta4)
@@ -146,48 +146,6 @@ class ARM_5DOF:
 
         return [theta1, theta2, theta3, theta4, theta5]
     
-
-    def linePath(self, end):
-
-        current = np.array(self.joint_coordinates[5][:3])  # just (x, y, z)
-        end = np.array(end[:3])
-        print(current, end)
-
-        # Compute total distance and number of steps
-        diff = end - current
-        dist = np.linalg.norm(diff)
-        steps = max(2, int(dist / self.path_resolution))
-
-        # Interpolate 
-        pos_path = [] # for storing positions
-        ang_path = [] # for storing joint angles to reach those positions
-        for i in range(steps + 1):
-            alpha = i / steps
-            interp_pos = current + alpha * diff
-            pos_path.append(interp_pos)
-            
-            # assume fixed theta4 & theta5
-            theta4, theta5 = self.joint_angles[3], self.joint_angles[4]
-
-            try:
-                ang_path.append(self.solveIK([*interp_pos, theta4, theta5]))
-            except Exception as e:
-                print(f"IK failed at step {i}/{steps}: {e}")
-                break  
-
-        return pos_path, ang_path
-    
-
-    # slice path into lower resolution for display purposes
-    def slicePath(self, pos_path, ang_path, n):
-
-        sliced_pos_path = pos_path[::n]
-        sliced_ang_path = ang_path[::n]
-        if not np.array_equal(pos_path[-1], sliced_pos_path[-1]):
-            sliced_pos_path.append(pos_path[-1])
-        if not np.array_equal(ang_path[-1], sliced_ang_path[-1]):
-            sliced_ang_path.append(ang_path[-1])
-        return sliced_pos_path, sliced_ang_path
 
 
 

@@ -19,25 +19,19 @@ sys.path.append(str(srcDir))
 app = FastAPI()
 
 
-# --- Robot-ish state (replace with your real driver) ---
-@dataclass
-class RobotState:
-    enabled: bool = False
-    estop: bool = False
-    busy: bool = False
-    mode: str = "manual"
-    speed: float = 0.2
-    last_error: str = ""
+# robot
+from kinematic import ARM_5DOF
+robot = ARM_5DOF()
+
+# display library
+from display import ChessarmDisplay
+chessarmDisplay = ChessarmDisplay()
 
 
-state = RobotState()
 clients: Set[WebSocket] = set()
 lock = asyncio.Lock()
 
 
-
-from display import ChessarmDisplay
-chessarmDisplay = ChessarmDisplay()
 
 
 
@@ -68,11 +62,6 @@ def ack(req_id: str, ok: bool, reason: str = "") -> Dict[str, Any]:
 
 
 
-async def do_work_simulated(cmd: str, args: Dict[str, Any]) -> None:
-    # Replace with your robot SDK calls
-    await asyncio.sleep(0.25)
-
-
 
 # --- WebSocket MUST be defined before StaticFiles mount at "/" ---
 @app.websocket("/ws")
@@ -81,17 +70,16 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     clients.add(ws)
 
-    # send initial state
-    await ws.send_text(json.dumps({"type": "state", **asdict(state)}))
-
     # send initial frames
-    await ws.send_json({
-                        "type": "frames",
-                        "displayTiles": {
-                            str(i): tile.toBase64()
-                            for i, tile in enumerate(chessarmDisplay.displayTiles)
-                        }
-                    })
+    await ws.send_json(
+    {
+        "type": "frames",
+        "displayTiles": 
+        {
+            str(i): tile.toBase64()
+            for i, tile in enumerate(chessarmDisplay.displayTiles)
+        }
+    })
 
     try:
         
@@ -110,15 +98,14 @@ async def ws_endpoint(ws: WebSocket):
             # Gatekeeping + fast state changes
             async with lock:
 
-                if state.estop:
-                    await ws.send_text(json.dumps(ack(req_id, False, "E-STOP active")))
-                    continue
-
-                if cmd == "updateall":
+                if cmd == "update_all":
                     
                     await ws.send_text(json.dumps(ack(req_id, True)))
 
-                    chessarmDisplay.updateAllDisplayTiles()
+                    robot.status = "busy"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+
+                    await asyncio.to_thread(chessarmDisplay.updateAllDisplayTiles)
 
                     await ws.send_json({
                         "type": "frames",
@@ -127,42 +114,44 @@ async def ws_endpoint(ws: WebSocket):
                             for i, tile in enumerate(chessarmDisplay.displayTiles)
                         }
                     })
-                    continue
 
-                if cmd == "stop":
-                    # TODO: send stop to robot
-                    state.busy = False
+                    robot.status = "ready"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+
+
+                # do not continue on commands that take time
+                elif cmd == "jog_joints":
+
                     await ws.send_text(json.dumps(ack(req_id, True)))
-                    await broadcast({"type": "state", **asdict(state)})
-                    continue
 
-                if not state.enabled:
-                    await ws.send_text(json.dumps(ack(req_id, False, "Robot not enabled")))
-                    continue
+                    robot.status = "busy"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
 
-                if state.busy:
-                    await ws.send_text(json.dumps(ack(req_id, False, "Robot busy")))
-                    continue
+                    print(f"jogging joint angles: {args['joint_angles']}")
+                    await asyncio.sleep(0.25) # pretend task takes time
 
-                # commands that take time
-                if cmd in ("move_named_pose", "run_action"):
-                    state.busy = True
+                    robot.status = "ready"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+
+
+                elif cmd == "jog_pose":
+
                     await ws.send_text(json.dumps(ack(req_id, True)))
-                    await broadcast({"type": "state", **asdict(state)})
+
+                    robot.status = "busy"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+
+                    print(f"jogging pose: {args['pose']}")
+                    await asyncio.sleep(0.25) # pretend task takes time
+
+                    robot.status = "ready"
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+            
                 else:
-                    await ws.send_text(json.dumps(ack(req_id, False, f"Unknown cmd: {cmd}")))
-                    continue
 
-            # Execute outside lock
-            try:
-                await do_work_simulated(cmd, args)
-            except Exception as e:
-                async with lock:
-                    state.last_error = str(e)
-            finally:
-                async with lock:
-                    state.busy = False
-                    await broadcast({"type": "state", **asdict(state)})
+                    await ws.send_text(json.dumps(ack(req_id, False, f"Unknown cmd: {cmd}")))
+    
+
 
     except WebSocketDisconnect:
         clients.discard(ws)
