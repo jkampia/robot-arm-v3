@@ -22,7 +22,7 @@ int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
 
-int enaFlags[numJoints] = {1, 1, 1, 1, 1};
+int enaFlags[numJoints] = {0, 1, 1, 1, 1};
 
 JointInfo jointInfo[6];
 
@@ -181,6 +181,15 @@ void populateJointInfo()
 
     jointInfo[i].stepsPerDeg = actualStepsPerRev * revsPerDeg;
     jointInfo[i].degsPerStep = 1 /  jointInfo[i].stepsPerDeg;
+
+    jointInfo[i].lowerLimitRad = lowerLimitRad[i];
+    jointInfo[i].upperLimitRad = upperLimitRad[i];
+
+    /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
+    const float t1 = 500 * 1e-6; 
+    const float angle = 1;
+    const float accel = jointAccel[i];
+    jointInfo[i].delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
   }
 }
 
@@ -513,12 +522,12 @@ delayVector: the joint delay vector to be populated
 void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint8_t>& delayVector) 
 { 
   /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
-  const float t1 = 500 * 1e-6; 
-  const float angle = 1;
-  const float accel = 0.2;
-  const float delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
+  //const float t1 = 500 * 1e-6; 
+  //const float angle = 1;
+  //const float accel = 0.2;
+  //const float delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
 
-  float d = delay0;
+  float d = jointInfo.delay0;
   int n = 0; 
   int rampUpStepCount = 0;
   //int totalSteps = 0;
