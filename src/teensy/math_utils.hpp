@@ -14,9 +14,9 @@ inline int sign(float x)
 
 
 /*
-Scales all values in a uint8_t vector by a scalar value
+Scales all values in a uint16_t vector by a scalar value
 */
-inline void scaleVector(std::vector<uint8_t>& delayVector, float scalar) 
+inline void scaleVector(std::vector<uint16_t>& delayVector, float scalar) 
 {
   uint64_t scaledTotalTime = 0;
   for (auto& delay : delayVector) 

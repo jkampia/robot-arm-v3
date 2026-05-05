@@ -13,14 +13,16 @@ from fastapi.staticfiles import StaticFiles
 import cv2
 import base64
 
-srcDir = Path(__file__).resolve().parents[2]
+moduleDir = Path(__file__).resolve().parents[2]
+srcDir = moduleDir.parent
 sys.path.append(str(srcDir))
+sys.path.append(str(moduleDir))
 
 app = FastAPI()
 
 
 # robot
-from kinematic import ARM_5DOF
+from chessarm.kinematics import ARM_5DOF
 robot = ARM_5DOF()
 
 # display library
@@ -80,6 +82,7 @@ async def ws_endpoint(ws: WebSocket):
             for i, tile in enumerate(chessarmDisplay.displayTiles)
         }
     })
+    await ws.send_text(json.dumps(robot.stateToDict()))
 
     try:
         
@@ -102,7 +105,7 @@ async def ws_endpoint(ws: WebSocket):
                     
                     await ws.send_text(json.dumps(ack(req_id, True)))
 
-                    robot.status = "busy"
+                    robot.setStatus("busy")
                     await ws.send_text(json.dumps(robot.stateToDict()))
 
                     await asyncio.to_thread(chessarmDisplay.updateAllDisplayTiles)
@@ -115,36 +118,59 @@ async def ws_endpoint(ws: WebSocket):
                         }
                     })
 
-                    robot.status = "ready"
+                    robot.setStatus("ready")
                     await ws.send_text(json.dumps(robot.stateToDict()))
 
 
                 # do not continue on commands that take time
+                elif cmd == "set_joint_angles":
+
+                    jointAnglesDeg = [float(value) for value in args["joint_angles"]]
+                    try:
+                        robot.setJointAnglesDeg(jointAnglesDeg)
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Invalid joint angles: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(robot.stateToDict()))
+
+
                 elif cmd == "jog_joints":
 
                     await ws.send_text(json.dumps(ack(req_id, True)))
 
-                    robot.status = "busy"
+                    jointAnglesDeg = [float(value) for value in args["joint_angles"]]
+                    robot.setJointAnglesDeg(jointAnglesDeg)
+
+                    robot.setStatus("busy")
                     await ws.send_text(json.dumps(robot.stateToDict()))
 
-                    print(f"jogging joint angles: {args['joint_angles']}")
+                    print(f"jogging joint angles: {jointAnglesDeg}")
                     await asyncio.sleep(0.25) # pretend task takes time
 
-                    robot.status = "ready"
+                    robot.setStatus("ready")
                     await ws.send_text(json.dumps(robot.stateToDict()))
 
 
                 elif cmd == "jog_pose":
 
+                    pose = [float(value) for value in args["pose"]]
+                    try:
+                        robot.setPoseMmDeg(pose)
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Invalid pose: {exc}")))
+                        continue
+
                     await ws.send_text(json.dumps(ack(req_id, True)))
 
-                    robot.status = "busy"
+                    robot.setStatus("busy")
                     await ws.send_text(json.dumps(robot.stateToDict()))
 
-                    print(f"jogging pose: {args['pose']}")
+                    print(f"jogging pose: {pose}")
                     await asyncio.sleep(0.25) # pretend task takes time
 
-                    robot.status = "ready"
+                    robot.setStatus("ready")
                     await ws.send_text(json.dumps(robot.stateToDict()))
             
                 else:
@@ -158,5 +184,6 @@ async def ws_endpoint(ws: WebSocket):
 
 # --- Static frontend (React build) mount LAST ---
 BASE_DIR = Path(__file__).resolve().parent
-DIST_DIR = BASE_DIR / "dist"
-app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="static")
+DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
+if DIST_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="static")

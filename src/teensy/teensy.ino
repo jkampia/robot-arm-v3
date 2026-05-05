@@ -22,11 +22,11 @@ int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
 
-int enaFlags[numJoints] = {0, 1, 1, 1, 1};
+int enaFlags[numJoints] = {0, 0, 0, 0, 0};
 
-JointInfo jointInfo[6];
+JointInfo jointInfo[numJoints];
 
-std::vector<uint8_t> jointDelays[numJoints];
+std::vector<uint16_t> jointDelays[numJoints];
 
 
 /* serial */
@@ -242,6 +242,13 @@ implementAcceleration: whether or not to use acceleration S-curve or static spee
 */
 void jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
 {
+  // check validity of movement
+  if (!checkAgainstJointLimits(desiredJointAngles)
+  {
+    Serial.println("")
+    return;
+  }
+
   // calculate steps to move to satisfy angle delta
   int stepsToMove[numJoints];
   int jointSigns[numJoints];
@@ -440,6 +447,37 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
 
 
 
+// resets reference point for robot arm -- be very careful when calling this
+void zeroAllJoints()
+{
+  for (int i = 0; i < numJoints; i++)
+  {
+    currentJointSteps[i] = 0;
+    currentJointAngles[i] = homeJointAngles[i];
+  }
+
+  printArray("Zeroed joint steps: ", currentJointSteps, numJoints);
+  printArray("Zeroed joint angles: ", currentJointAngles, numJoints);
+}
+
+
+
+// returns true if all command angles are valid & do not exceed joint limits
+// commandAngles should be in radians
+bool checkAgainstJointLimits(const float* commandAngles)
+{
+  for (int i = 0; i < numJoints; i++)
+  {
+    if (commandAngles[i] > jointInfo[i].upperLimitRad || commandAngles[i] < jointInfo[i].lowerLimitRad)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+
+
 void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int movementTimeUs)
 {
   if (movementTimeUs <= 0) 
@@ -519,13 +557,15 @@ motorIndex: the joint index (0-4)
 numSteps: the number of steps the joint has to move
 delayVector: the joint delay vector to be populated
 */
-void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint8_t>& delayVector) 
+void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint16_t>& delayVector) 
 { 
   /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
   //const float t1 = 500 * 1e-6; 
   //const float angle = 1;
-  //const float accel = 0.2;
+  //const float accel = 0.1;
   //const float delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
+
+  //const float delay0 = 2000 * sqrt(2*angle / accel) * 0.67703;
 
   float d = jointInfo.delay0;
   int n = 0; 
@@ -551,7 +591,8 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
       d = (d * (4 * n + 1)) / (4 * n + 1 - 2);
     }
     
-    delayVector.push_back(uint8_t(d));
+    Serial.println(uint16_t(d));
+    delayVector.push_back(uint16_t(d));
     //Serial.println(delay_array[i]);  
   }
 }
@@ -677,9 +718,18 @@ Acts on serialBuffer global array of commands
 void parseCommand()
 {
   if (!newCommand) return;
+
+  // check through string debug commands
+  String command = serialBuffer[0];
+
+  if (command == "zero")
+  {
+    zeroAllJoints();
+    return;
+  }
   
-  serialCommand commandSignature =
-    static_cast<serialCommand>(serialBuffer[0].toInt());
+
+  serialCommand commandSignature = static_cast<serialCommand>(command.toInt());
   //Serial.println(serialBuffer[0].toInt());
   
   switch(commandSignature)

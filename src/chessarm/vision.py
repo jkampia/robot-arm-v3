@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-from torchvision import transforms
 from PIL import Image
 import os
 import cv2
@@ -12,26 +9,45 @@ import time
 from frame_server.request_frame import FrameRequester
 
 
-class TinyCNN(nn.Module):
+try:
+    import torch
+    import torch.nn as nn
+    from torchvision import transforms
+except ModuleNotFoundError:
+    torch = None
+    nn = None
+    transforms = None
 
-    def __init__(self, num_classes=3, img_size=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(64 * (img_size // 8) * (img_size // 8), 128), nn.ReLU(),
-            nn.Linear(128, num_classes)
-        )
 
-    def forward(self, x):
-        return self.net(x)
+if nn is not None:
+    class TinyCNN(nn.Module):
+
+        def __init__(self, num_classes=3, img_size=64):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Flatten(),
+                nn.Linear(64 * (img_size // 8) * (img_size // 8), 128), nn.ReLU(),
+                nn.Linear(128, num_classes)
+            )
+
+        def forward(self, x):
+            return self.net(x)
+else:
+    class TinyCNN:
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("Install torch and torchvision to use occupancy detection.")
 
 
 class OccupancyDetector:
 
     def __init__(self, model_path, class_names=['black', 'empty', 'white'], img_size=64):
+        if torch is None or transforms is None:
+            raise RuntimeError("Install torch and torchvision to use occupancy detection.")
+
         
         self.class_names = class_names
         self.img_size = img_size
