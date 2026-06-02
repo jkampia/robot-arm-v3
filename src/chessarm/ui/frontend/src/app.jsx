@@ -9,6 +9,48 @@ function formatFieldValue(value) {
   return String(Math.round(value * 10) / 10);
 }
 
+function clickToSquare(event) {
+  const boardImageElement = event.currentTarget.querySelector("img");
+  const rect = (boardImageElement ?? event.currentTarget).getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const col = Math.min(7, Math.max(0, Math.floor((x / rect.width) * 8)));
+  const row = Math.min(7, Math.max(0, Math.floor((y / rect.height) * 8)));
+  const file = String.fromCharCode("a".charCodeAt(0) + col);
+  const rank = String(8 - row);
+  return `${file}${rank}`;
+}
+
+function squareToGridPosition(square) {
+  if (!square || square.length !== 2) return null;
+  const col = square.charCodeAt(0) - "a".charCodeAt(0);
+  const row = 8 - Number(square[1]);
+  if (col < 0 || col > 7 || row < 0 || row > 7) return null;
+  return { col, row };
+}
+
+function squareHasPiece(fen, square) {
+  const position = squareToGridPosition(square);
+  if (!position) return false;
+
+  const placement = String(fen || "").split(" ")[0];
+  const rows = placement.split("/");
+  const rowText = rows[position.row] || "";
+  let col = 0;
+
+  for (const char of rowText) {
+    if (/\d/.test(char)) {
+      col += Number(char);
+      continue;
+    }
+
+    if (col === position.col) return true;
+    col += 1;
+  }
+
+  return false;
+}
+
 export default function App() {
 
   const [wsStatus, setWsStatus] = useState("disconnected");
@@ -19,6 +61,13 @@ export default function App() {
   const [frame2, setFrame2] = useState(null);
   const [frame3, setFrame3] = useState(null);
   const [frame4, setFrame4] = useState(null);
+  const [boardImage, setBoardImage] = useState(null);
+  const [boardFen, setBoardFen] = useState("");
+  const [playerColor, setPlayerColor] = useState("white");
+  const [canUndoMove, setCanUndoMove] = useState(false);
+  const [canEnterMove, setCanEnterMove] = useState(false);
+  const [stockfishElo, setStockfishElo] = useState("1500");
+  const [selectedSquare, setSelectedSquare] = useState(null);
   const [linkPlotXY, setLinkPlotXY] = useState(null);
   const [linkPlotXZ, setLinkPlotXZ] = useState(null);
 
@@ -45,7 +94,7 @@ export default function App() {
   const [pose3, setPose3] = useState("0");
   const [pose4, setPose4] = useState("0");
 
-  const [activeTab, setActiveTab] = useState("controls");
+  const [activeTab, setActiveTab] = useState("home");
   const [slidersEnabled, setSlidersEnabled] = useState(true);
   const poseValuesRef = useRef(["0", "0", "0", "0", "0"]);
 
@@ -184,6 +233,16 @@ export default function App() {
           setCommandError(msg.ok ? "" : (msg.reason || "Command failed"));
         }
 
+        else if (msg.type === "board_state")
+        {
+          setBoardImage(msg.image ? `data:image/jpeg;base64,${msg.image}` : null);
+          setBoardFen(msg.fen || "");
+          setPlayerColor(msg.player_color || "white");
+          setCanUndoMove(Boolean(msg.can_undo));
+          setCanEnterMove(Boolean(msg.can_enter_move));
+          setStockfishElo(String(msg.stockfish_elo || 1500));
+        }
+
         else if (msg.type === "serial_state")
         {
           setSerialStatus(msg.status || "unknown");
@@ -251,6 +310,25 @@ export default function App() {
     ws.send(JSON.stringify({ type: "cmd", req_id, cmd, args }));
   }
 
+  function handleBoardClick(event) {
+    const square = clickToSquare(event);
+
+    if (!selectedSquare) {
+      if (!squareHasPiece(boardFen, square)) return;
+      setSelectedSquare(square);
+      setCommandError("");
+      return;
+    }
+
+    if (selectedSquare === square) {
+      setSelectedSquare(null);
+      return;
+    }
+
+    sendCmd("move_piece", { from: selectedSquare, to: square });
+    setSelectedSquare(null);
+  }
+
   function updateJointValue(index, value) {
     const nextValues = [robotJoint0, robotJoint1, robotJoint2, robotJoint3, robotJoint4];
     nextValues[index] = value;
@@ -293,6 +371,15 @@ export default function App() {
       >
         <button
           role="tab"
+          aria-selected={activeTab === "home"}
+          onClick={() => setActiveTab("home")}
+          style={tabStyle(activeTab === "home")}
+        >
+          Home
+        </button>
+
+        <button
+          role="tab"
           aria-selected={activeTab === "controls"}
           onClick={() => setActiveTab("controls")}
           style={tabStyle(activeTab === "controls")}
@@ -309,6 +396,151 @@ export default function App() {
           Image pipeline
         </button>
       </div>
+
+      {activeTab === "home" && (
+        <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap", width: "100%" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              alignItems: "flex-start",
+              flex: "0 0 276px",
+            }}
+          >
+            <div style={{ display: "flex", gap: 12, alignItems: "stretch", flexWrap: "wrap" }}>
+              <div style={statusBoxStyle}>
+                <span style={statusLabelStyle}>Interface</span>
+                <span style={statusValueStyleFor(wsStatus)}>{wsStatus}</span>
+              </div>
+
+              <div style={statusBoxStyle}>
+                <span style={statusLabelStyle}>Robot</span>
+                <span style={statusValueStyleFor(robotStatus)}>{robotStatus}</span>
+              </div>
+            </div>
+
+            <div style={{ ...statusBoxStyle, width: "100%" }}>
+              <span style={statusLabelStyle}>Color</span>
+              <span style={statusValueStyle}>{playerColor}</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, width: "100%" }}>
+              <input
+                type="number"
+                min="1320"
+                max="3190"
+                step="10"
+                value={stockfishElo}
+                onChange={(event) => setStockfishElo(event.target.value)}
+                aria-label="Stockfish ELO"
+                style={inputStyle({ padding: "10px 12px", width: "100%", boxSizing: "border-box" })}
+              />
+              <button
+                onClick={() => sendCmd("update_stockfish_elo", { elo: Number(stockfishElo) })}
+                style={buttonStyle({ minHeight: 44, padding: "0 12px", fontSize: 14 })}
+                disabled={wsStatus !== "connected"}
+              >
+                update elo
+              </button>
+            </div>
+
+            <button
+              onClick={() => sendCmd("update_board")}
+              style={buttonStyle({ width: "100%", minHeight: 44, fontSize: 16 })}
+              disabled={robotStatus !== "ready"}
+            >
+              update board
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedSquare(null);
+                sendCmd("enter_move");
+              }}
+              style={buttonStyle({ width: "100%", minHeight: 44, fontSize: 16 })}
+              disabled={wsStatus !== "connected" || !canEnterMove}
+            >
+              enter move
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedSquare(null);
+                sendCmd("undo_move");
+              }}
+              style={buttonStyle({ width: "100%", minHeight: 44, fontSize: 16 })}
+              disabled={wsStatus !== "connected" || !canUndoMove}
+            >
+              back
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedSquare(null);
+                sendCmd("new_game");
+              }}
+              style={buttonStyle({ width: "100%", minHeight: 44, fontSize: 16 })}
+              disabled={wsStatus !== "connected"}
+            >
+              new game
+            </button>
+
+            {commandError && (
+              <div style={{ color: "#fca5a5", fontSize: 14 }}>
+                {commandError}
+              </div>
+            )}
+          </div>
+
+          <div
+            onClick={handleBoardClick}
+            style={{
+              position: "relative",
+              width: "clamp(320px, min(calc(100vw - 340px), calc(100vh - 100px)), 960px)",
+              maxWidth: "100%",
+              aspectRatio: "1 / 1",
+              background: colors.panelSoft,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 8,
+              cursor: "pointer",
+              overflow: "hidden",
+            }}
+          >
+            <img
+              src={boardImage ?? ""}
+              alt="Chess board state"
+              title={boardFen}
+              draggable={false}
+              style={{
+                display: "block",
+                width: "100%",
+                height: "100%",
+                userSelect: "none",
+              }}
+            />
+            {(() => {
+              const selectedPosition = squareToGridPosition(selectedSquare);
+              if (!selectedPosition) return null;
+
+              return (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: `${selectedPosition.col * 12.5}%`,
+                    top: `${selectedPosition.row * 12.5}%`,
+                    width: "12.5%",
+                    height: "12.5%",
+                    background: "rgba(125, 211, 252, 0.24)",
+                    pointerEvents: "none",
+                  }}
+                />
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {activeTab === "controls" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 24, alignItems: "flex-start" }}>

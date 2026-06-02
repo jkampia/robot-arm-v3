@@ -2,14 +2,15 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+BACKEND_DIR="$PROJECT_ROOT/src/chessarm/ui/backend"
 PYTHON="$PROJECT_ROOT/venv/bin/python"
 
 if [ ! -x "$PYTHON" ]; then
   PYTHON="python3"
 fi
 
-cd "$SCRIPT_DIR"
+cd "$BACKEND_DIR"
 
 if ! "$PYTHON" -c "import uvicorn" >/dev/null 2>&1; then
   echo "uvicorn is not installed for $PYTHON."

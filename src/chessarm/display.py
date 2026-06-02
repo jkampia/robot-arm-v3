@@ -59,6 +59,8 @@ class ChessarmDisplay:
         self.imageProcessor = ImageProcessor()
         self.calibrationHelper = CalibrationHelper()
 
+        self.displayTiles[3].data = self.frameEmptyChessboard()
+
 
 
     def updateAllDisplayTiles(self):
@@ -89,6 +91,23 @@ class ChessarmDisplay:
         canvas = np.zeros((boardSize, 640, 3), dtype=np.uint8)
         x_offset = (640 - boardSize) // 2 # center board square inside (preserve aspect ratio)
         canvas[:, x_offset:x_offset + boardSize] = img_bgr
+        return canvas
+
+
+    def frameChessboard(self, fen: str, boardSize=480, flipped=False):
+
+        board = chess.Board(fen)
+        svg = chess.svg.board(board=board, size=boardSize, flipped=flipped)
+        pngBytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"))
+        imgBgr = cv2.imdecode(np.frombuffer(pngBytes, np.uint8), cv2.IMREAD_COLOR)
+        if imgBgr is None:
+            raise RuntimeError("Failed to decode board image. Check cairosvg install.")
+        if imgBgr.shape[0] != boardSize or imgBgr.shape[1] != boardSize:
+            imgBgr = cv2.resize(imgBgr, (boardSize, boardSize), interpolation=cv2.INTER_AREA)
+
+        canvas = np.zeros((boardSize, 640, 3), dtype=np.uint8)
+        x_offset = (640 - boardSize) // 2 # center board square inside (preserve aspect ratio)
+        canvas[:, x_offset:x_offset + boardSize] = imgBgr
         return canvas
 
 

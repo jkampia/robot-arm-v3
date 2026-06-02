@@ -1,0 +1,80 @@
+2026-06-02T19:06:04
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+
+MOVE: e2e4
+FEN: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1
+
+MOVE: c7c5
+FEN: rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2
+
+MOVE: d2d4
+FEN: rnbqkbnr/pp1ppppp/8/2p5/3PP3/8/PPP2PPP/RNBQKBNR b KQkq d3 0 2
+
+MOVE: d7d5
+FEN: rnbqkbnr/pp2pppp/8/2pp4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq d6 0 3
+
+MOVE: e4d5
+FEN: rnbqkbnr/pp2pppp/8/2pP4/3P4/8/PPP2PPP/RNBQKBNR b KQkq - 0 3
+
+MOVE: d8d5
+FEN: rnb1kbnr/pp2pppp/8/2pq4/3P4/8/PPP2PPP/RNBQKBNR w KQkq - 0 4
+
+MOVE: d4c5
+FEN: rnb1kbnr/pp2pppp/8/2Pq4/8/8/PPP2PPP/RNBQKBNR b KQkq - 0 4
+
+MOVE: d5d1
+FEN: rnb1kbnr/pp2pppp/8/2P5/8/8/PPP2PPP/RNBqKBNR w KQkq - 0 5
+
+MOVE: e1d1
+FEN: rnb1kbnr/pp2pppp/8/2P5/8/8/PPP2PPP/RNBK1BNR b kq - 0 5
+
+MOVE: e7e6
+FEN: rnb1kbnr/pp3ppp/4p3/2P5/8/8/PPP2PPP/RNBK1BNR w kq - 0 6
+
+MOVE: f1b5
+FEN: rnb1kbnr/pp3ppp/4p3/1BP5/8/8/PPP2PPP/RNBK2NR b kq - 1 6
+
+MOVE: b8c6
+FEN: r1b1kbnr/pp3ppp/2n1p3/1BP5/8/8/PPP2PPP/RNBK2NR w kq - 2 7
+
+MOVE: b5c6
+FEN: r1b1kbnr/pp3ppp/2B1p3/2P5/8/8/PPP2PPP/RNBK2NR b kq - 0 7
+
+MOVE: e8d8
+FEN: r1bk1bnr/pp3ppp/2B1p3/2P5/8/8/PPP2PPP/RNBK2NR w - - 1 8
+
+MOVE: c1g5
+FEN: r1bk1bnr/pp3ppp/2B1p3/2P3B1/8/8/PPP2PPP/RN1K2NR b - - 2 8
+
+MOVE: f7f6
+FEN: r1bk1bnr/pp4pp/2B1pp2/2P3B1/8/8/PPP2PPP/RN1K2NR w - - 0 9
+
+MOVE: g5f6
+FEN: r1bk1bnr/pp4pp/2B1pB2/2P5/8/8/PPP2PPP/RN1K2NR b - - 0 9
+
+MOVE: g8f6
+FEN: r1bk1b1r/pp4pp/2B1pn2/2P5/8/8/PPP2PPP/RN1K2NR w - - 0 10
+
+MOVE: b1c3
+FEN: r1bk1b1r/pp4pp/2B1pn2/2P5/8/2N5/PPP2PPP/R2K2NR b - - 1 10
+
+MOVE: f8c5
+FEN: r1bk3r/pp4pp/2B1pn2/2b5/8/2N5/PPP2PPP/R2K2NR w - - 0 11
+
+MOVE: g1f3
+FEN: r1bk3r/pp4pp/2B1pn2/2b5/8/2N2N2/PPP2PPP/R2K3R b - - 1 11
+
+MOVE: b7c6
+FEN: r1bk3r/p5pp/2p1pn2/2b5/8/2N2N2/PPP2PPP/R2K3R w - - 0 12
+
+MOVE: c3d5
+FEN: r1bk3r/p5pp/2p1pn2/2bN4/8/5N2/PPP2PPP/R2K3R b - - 1 12
+
+MOVE: e6d5
+FEN: r1bk3r/p5pp/2p2n2/2bp4/8/5N2/PPP2PPP/R2K3R w - - 0 13
+
+MOVE: h1e1
+FEN: r1bk3r/p5pp/2p2n2/2bp4/8/5N2/PPP2PPP/R2KR3 b - - 1 13
+
+MOVE: c5f2
+FEN: r1bk3r/p5pp/2p2n2/3p4/8/5N2/PPP2bPP/R2KR3 w - - 0 14

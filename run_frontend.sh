@@ -2,8 +2,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+FRONTEND_DIR="$PROJECT_ROOT/src/chessarm/ui/frontend"
 
-cd "$SCRIPT_DIR"
+cd "$FRONTEND_DIR"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is not installed or is not on PATH."
@@ -24,7 +26,7 @@ fi
 
 if [ ! -d "node_modules" ]; then
   echo "Frontend dependencies are not installed."
-  echo "Run: npm install"
+  echo "Run: cd $FRONTEND_DIR && npm install"
   exit 1
 fi
 

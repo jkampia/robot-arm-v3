@@ -15,9 +15,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-import cv2
-import base64
-
 moduleDir = Path(__file__).resolve().parents[2]
 srcDir = moduleDir.parent
 sys.path.append(str(srcDir))
@@ -318,7 +315,13 @@ sensorPolling = SensorPollingManager(
 
 # display library
 from display import ChessarmDisplay
+from chessarm.board_renderer import imageToBase64, renderChessboardImage
+from chessarm.chessboard import ChessBoard
+from chessarm.game_logger import GameLogger
 chessarmDisplay = ChessarmDisplay()
+chessBoard = ChessBoard(playing_as="white", use_stockfish=False)
+chessBoardLock = threading.RLock()
+LOGS_DIR = moduleDir / "logs"
 
 
 clients: Set[WebSocket] = set()
@@ -380,8 +383,51 @@ def robotStateMessage() -> Dict[str, Any]:
         return robot.stateToDict()
 
 
+def boardStateMessage() -> Dict[str, Any]:
+    with chessBoardLock:
+        fen = chessBoard.toFEN(chessBoard.current_state)
+        playerColor = chessBoard.playing_as
+        canUndo = len(chessBoard.move_history) > 0
+        canEnterMove = chessBoard.awaiting_stockfish_response
+        stockfishElo = chessBoard.stockfish_elo
+
+    boardImage = renderChessboardImage(fen)
+
+    return {
+        "type": "board_state",
+        "fen": fen,
+        "player_color": playerColor,
+        "can_undo": canUndo,
+        "can_enter_move": canEnterMove,
+        "stockfish_elo": stockfishElo,
+        "image": imageToBase64(boardImage),
+    }
+
+
+def currentBoardFen() -> str:
+    with chessBoardLock:
+        return chessBoard.toFEN(chessBoard.current_state)
+
+
+def createGameLoggerWithInitialState() -> GameLogger:
+    gameLogger = GameLogger(LOGS_DIR)
+    gameLogger.logBoardState(currentBoardFen())
+    return gameLogger
+
+
+def resetGameState() -> GameLogger:
+    global chessBoard
+
+    with chessBoardLock:
+        stockfishElo = chessBoard.stockfish_elo
+        chessBoard = ChessBoard(playing_as="white", use_stockfish=False, stockfish_elo=stockfishElo)
+
+    return createGameLoggerWithInitialState()
+
+
 @app.on_event("startup")
 async def startBackgroundWorkers():
+    app.state.gameLogger = createGameLoggerWithInitialState()
     serialConnection.start()
     sensorPolling.start(asyncio.get_running_loop())
     app.state.serialStatusTask = asyncio.create_task(broadcastSerialStatusLoop())
@@ -441,6 +487,7 @@ async def ws_endpoint(ws: WebSocket):
         }
     })
     await ws.send_text(json.dumps(robotStateMessage()))
+    await ws.send_text(json.dumps(boardStateMessage()))
     await ws.send_text(json.dumps(serialStateMessage()))
     await ws.send_text(json.dumps(serialCommandsMessage()))
 
@@ -482,6 +529,77 @@ async def ws_endpoint(ws: WebSocket):
                     with robotLock:
                         robot.setStatus("ready")
                     await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "update_board":
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(boardStateMessage()))
+
+                elif cmd == "new_game":
+
+                    app.state.gameLogger = resetGameState()
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(boardStateMessage()))
+
+                elif cmd == "update_stockfish_elo":
+
+                    try:
+                        stockfishElo = int(args.get("elo"))
+                        if stockfishElo < 1320 or stockfishElo > 3190:
+                            raise ValueError("Stockfish ELO must be between 1320 and 3190.")
+
+                        with chessBoardLock:
+                            chessBoard.setStockfishElo(stockfishElo)
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, str(exc))))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(boardStateMessage()))
+
+                elif cmd == "move_piece":
+
+                    fromSquare = str(args.get("from", ""))
+                    toSquare = str(args.get("to", ""))
+                    with chessBoardLock:
+                        ok, reason, move = chessBoard.movePieceIfLegal(fromSquare, toSquare)
+                        fen = chessBoard.toFEN(chessBoard.current_state) if ok else ""
+
+                    await ws.send_text(json.dumps(ack(req_id, ok, reason)))
+                    if ok:
+                        app.state.gameLogger.logMove(move, fen)
+                        await ws.send_text(json.dumps(boardStateMessage()))
+
+                elif cmd == "enter_move":
+
+                    with chessBoardLock:
+                        if not chessBoard.awaiting_stockfish_response:
+                            ok = False
+                            reason = "No entered move is waiting for a Stockfish response."
+                            stockfishMove = ""
+                            stockfishFen = ""
+                        else:
+                            ok, reason, stockfishMove = chessBoard.makeStockfishMove()
+                            stockfishFen = chessBoard.toFEN(chessBoard.current_state) if ok else ""
+
+                    await ws.send_text(json.dumps(ack(req_id, ok, reason)))
+                    if ok:
+                        if stockfishMove:
+                            app.state.gameLogger.logMove(stockfishMove, stockfishFen)
+                        await ws.send_text(json.dumps(boardStateMessage()))
+
+                elif cmd == "undo_move":
+
+                    with chessBoardLock:
+                        ok, reason, move = chessBoard.undoLastMove()
+                        fen = chessBoard.toFEN(chessBoard.current_state) if ok else ""
+
+                    await ws.send_text(json.dumps(ack(req_id, ok, reason)))
+                    if ok:
+                        app.state.gameLogger.logUndoMove(move, fen)
+                        await ws.send_text(json.dumps(boardStateMessage()))
 
 
                 # do not continue on commands that take time

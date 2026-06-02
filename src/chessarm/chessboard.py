@@ -1,10 +1,15 @@
 from enum import Enum, IntEnum
 import numpy as np
 import copy
+import chess as chess_lib
+import chess.engine
+import os
+import shutil
 
-from chessboard import display
-
-from stockfish import Stockfish
+try:
+    from stockfish import Stockfish
+except ImportError:
+    Stockfish = None
 
 
 class Occupancy(IntEnum):
@@ -72,6 +77,15 @@ FENSymbols = {
     PieceType.KING: "k"
 }
 
+PieceTypesByFenSymbol = {
+    "p": PieceType.PAWN,
+    "r": PieceType.ROOK,
+    "n": PieceType.KNIGHT,
+    "b": PieceType.BISHOP,
+    "q": PieceType.QUEEN,
+    "k": PieceType.KING,
+}
+
 
 FENCastling = {
     CastlingRights.BOTH: "KQ",
@@ -95,24 +109,47 @@ class ChessSquare:
 class ChessBoard:
 
 
-    def __init__(self, playing_as):
+    def __init__(self, playing_as, use_stockfish=True, inject_test_case=False, stockfish_path=None, stockfish_elo=1500):
         
         self.current_state = [[ChessSquare() for col in range(8)] for row in range(8)]
         self.prev_state = []
         self.setupInitialBoard(playing_as)
         self.snapshot() 
-        self.stockfish = Stockfish(path="/usr/games/stockfish", depth=18, parameters={"Threads": 2, "Minimum Thinking Time": 30})
+        self.stockfish = None
+        self.stockfish_path = self.resolveStockfishPath(stockfish_path)
+        self.stockfish_elo = int(stockfish_elo)
+        if use_stockfish:
+            if Stockfish is None:
+                raise ImportError("stockfish is required when use_stockfish=True")
+            self.stockfish = Stockfish(path="/usr/games/stockfish", depth=18, parameters={"Threads": 2, "Minimum Thinking Time": 30})
 
         self.playing_as = playing_as
+        self.active_color = "white"
+        self.castling_fen = "KQkq"
+        self.en_passant_fen = "-"
         self.white_can_castle = CastlingRights.BOTH
         self.black_can_castle = CastlingRights.BOTH
         self.en_passant_targets = [] #contains list of coordinates (i, j) 
         self.halfmove_clock = 0
-        self.fullmoves = 0
+        self.fullmoves = 1
+        self.move_history = []
+        self.awaiting_stockfish_response = False
 
-        self.injectTestCase()
+        if inject_test_case:
+            self.injectTestCase()
 
         
+    def resolveStockfishPath(self, stockfish_path=None):
+        explicit_path = stockfish_path or os.getenv("CHESSARM_STOCKFISH_PATH")
+        if explicit_path:
+            return explicit_path
+
+        default_path = "/usr/games/stockfish"
+        if os.path.exists(default_path):
+            return default_path
+
+        return shutil.which("stockfish")
+
 
     def setupInitialBoard(self, robot_color):
         for i in range(8):
@@ -229,26 +266,134 @@ class ChessBoard:
                 if j == 7 and i < 7:
                     fenstring += "/"
         
-        if self.playing_as == "white":
+        if self.active_color == "white":
             fenstring += " w"
         else:
             fenstring += " b"
 
-        fenstring += f" {FENCastling[self.white_can_castle]}"
-        fenstring += FENCastling[self.black_can_castle].lower()
-        fenstring += " " # add space before en passant targets
+        fenstring += f" {self.castling_fen or '-'}"
 
-        if len(self.en_passant_targets) == 0:
-            fenstring += "-"
-        else:
-            for tgt in self.en_passant_targets:
-                fenstring += self.matrixSquareToStandardNotation(tgt)
+        fenstring += f" {self.en_passant_fen or '-'}"
 
         fenstring += f" {self.halfmove_clock}"
 
         fenstring += f" {self.fullmoves}"
 
         return fenstring
+
+
+    def updateFromPythonChessBoard(self, board):
+        """
+        Replace current_state and metadata from a python-chess Board.
+        """
+        next_state = [[ChessSquare() for col in range(8)] for row in range(8)]
+        for rank in range(8):
+            for file in range(8):
+                piece = board.piece_at(chess_lib.square(file, rank))
+                if piece is None:
+                    continue
+
+                row = 7 - rank
+                col = file
+                next_state[row][col].piece_type = PieceTypesByFenSymbol[piece.symbol().lower()]
+                next_state[row][col].occupancy = Occupancy.WHITE if piece.color == chess_lib.WHITE else Occupancy.BLACK
+
+        self.current_state = next_state
+        self.active_color = "white" if board.turn == chess_lib.WHITE else "black"
+        self.castling_fen = board.castling_xfen()
+        self.en_passant_fen = chess_lib.square_name(board.ep_square) if board.ep_square is not None else "-"
+        self.halfmove_clock = board.halfmove_clock
+        self.fullmoves = board.fullmove_number
+        self.snapshot()
+
+
+    def updateFromFEN(self, fen):
+        self.updateFromPythonChessBoard(chess_lib.Board(fen))
+
+
+    def movePieceIfLegal(self, fromSquare, toSquare, promotion="q"):
+        """
+        Move a piece using standard notation, e.g. e2 -> e4.
+        Returns (ok, reason, move).
+        """
+        try:
+            board = chess_lib.Board(self.toFEN(self.current_state))
+            move = chess_lib.Move.from_uci(f"{fromSquare}{toSquare}")
+
+            if move not in board.legal_moves:
+                promotion_move = chess_lib.Move.from_uci(f"{fromSquare}{toSquare}{promotion}")
+                if promotion_move in board.legal_moves:
+                    move = promotion_move
+                else:
+                    return False, f"Illegal move: {fromSquare}{toSquare}", ""
+
+            previous_fen = self.toFEN(self.current_state)
+            board.push(move)
+            self.updateFromPythonChessBoard(board)
+            self.move_history.append({
+                "move": move.uci(),
+                "previous_fen": previous_fen,
+                "source": "user",
+            })
+            self.awaiting_stockfish_response = True
+            return True, "", move.uci()
+        except Exception as exc:
+            return False, str(exc), ""
+
+
+    def makeStockfishMove(self, time_limit_seconds=0.1):
+        """
+        Ask Stockfish to move for the current side to move.
+        Returns (ok, reason, move). If the game is over, ok is True with an empty move.
+        """
+        if not self.stockfish_path:
+            return False, "Stockfish is not configured. Set CHESSARM_STOCKFISH_PATH or install stockfish.", ""
+
+        board = chess_lib.Board(self.toFEN(self.current_state))
+        if board.is_game_over():
+            return True, "", ""
+
+        try:
+            with chess.engine.SimpleEngine.popen_uci(self.stockfish_path) as engine:
+                engine.configure({
+                    "UCI_LimitStrength": True,
+                    "UCI_Elo": self.stockfish_elo,
+                })
+                result = engine.play(board, chess.engine.Limit(time=time_limit_seconds))
+
+            if result.move is None:
+                return True, "", ""
+
+            previous_fen = self.toFEN(self.current_state)
+            board.push(result.move)
+            self.updateFromPythonChessBoard(board)
+            self.move_history.append({
+                "move": result.move.uci(),
+                "previous_fen": previous_fen,
+                "source": "stockfish",
+            })
+            self.awaiting_stockfish_response = False
+            return True, "", result.move.uci()
+        except Exception as exc:
+            return False, f"Stockfish move failed: {exc}", ""
+
+
+    def setStockfishElo(self, elo):
+        self.stockfish_elo = int(elo)
+
+
+    def undoLastMove(self):
+        """
+        Restore the board to the position before the last manual move.
+        Returns (ok, reason, move).
+        """
+        if not self.move_history:
+            return False, "No moves to undo.", ""
+
+        last_move = self.move_history.pop()
+        self.updateFromFEN(last_move["previous_fen"])
+        self.awaiting_stockfish_response = last_move.get("source") == "stockfish"
+        return True, "", last_move["move"]
     
 
 
@@ -463,25 +608,26 @@ class ChessBoard:
 
 
 
-board = ChessBoard(playing_as="white")
+if __name__ == "__main__":
+    from chessboard import display
 
-"""
-fen = board.toFEN(board.current_state)
-if board.stockfish.is_fen_valid(fen):
-    board.stockfish.set_fen_position(fen)
-    move = board.stockfish.get_best_move()
-    print(move)
-else:
-    print(f"Invalid fen string: {fen}")
-"""
+    board = ChessBoard(playing_as="white", inject_test_case=True)
 
-#
-board.simulateMoves(["e8c8", "a8d8"])
-board.analyzeOccupancyChanges()
+    """
+    fen = board.toFEN(board.current_state)
+    if board.stockfish.is_fen_valid(fen):
+        board.stockfish.set_fen_position(fen)
+        move = board.stockfish.get_best_move()
+        print(move)
+    else:
+        print(f"Invalid fen string: {fen}")
+    """
 
+    #
+    board.simulateMoves(["e8c8", "a8d8"])
+    board.analyzeOccupancyChanges()
 
-game_board = display.start()
-while True:
-    display.check_for_quit()
-    display.update(board.toFEN(board.current_state), game_board)
-
+    game_board = display.start()
+    while True:
+        display.check_for_quit()
+        display.update(board.toFEN(board.current_state), game_board)
