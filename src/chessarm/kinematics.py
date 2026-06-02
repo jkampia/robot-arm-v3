@@ -1,4 +1,4 @@
-# Helper class for inverse and forward kinematics, motion planning
+# robot state, forward / inverse kinematics and web display helper code
 
 import base64
 import math as m
@@ -14,14 +14,16 @@ from colors import COLOR_RGB, pickRandomColor
 np.set_printoptions(suppress=True, precision=2)
 
 
-def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y_limits=None, width=360, height=360, preserveAspectRatio=False):
+def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y_limits=None, width=360, height=360, preserveAspectRatio=False, overlay_points=None):
     marginLeft = 54
     marginRight = 34
     marginTop = 34
     marginBottom = 54
 
-    xs = [point[axis_indices[0]] for point in points]
-    ys = [point[axis_indices[1]] for point in points]
+    overlay_points = overlay_points or []
+    boundsPoints = points + overlay_points
+    xs = [point[axis_indices[0]] for point in boundsPoints]
+    ys = [point[axis_indices[1]] for point in boundsPoints]
 
     if x_limits is None:
         minX, maxX = min(xs), max(xs)
@@ -59,7 +61,11 @@ def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y
         return px, py
 
     projectedPoints = [project(x, y) for x, y in zip(xs, ys)]
-    polylinePoints = " ".join(f"{x:.1f},{y:.1f}" for x, y in projectedPoints)
+    pointCount = len(points)
+    projectedPrimaryPoints = projectedPoints[:pointCount]
+    projectedOverlayPoints = projectedPoints[pointCount:]
+    polylinePoints = " ".join(f"{x:.1f},{y:.1f}" for x, y in projectedPrimaryPoints)
+    overlayPolylinePoints = " ".join(f"{x:.1f},{y:.1f}" for x, y in projectedOverlayPoints)
 
     gridMarkup = []
     gridSpacing = (maxX - minX) / 4.0
@@ -80,10 +86,24 @@ def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y
 
     jointColors = ["#f87171", "#fbbf24", "#34d399", "#60a5fa", "#a78bfa", "#f472b6"]
     jointMarkup = []
-    for index, (x, y) in enumerate(projectedPoints):
+    for index, (x, y) in enumerate(projectedPrimaryPoints):
         jointMarkup.append(
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.5" '
             f'fill="{jointColors[index % len(jointColors)]}" stroke="#111827" stroke-width="1.5" />'
+        )
+    overlayJointMarkup = []
+    for index, (x, y) in enumerate(projectedOverlayPoints):
+        overlayJointMarkup.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.5" opacity="0.5" '
+            f'fill="{jointColors[index % len(jointColors)]}" stroke="#111827" stroke-width="1.5" />'
+        )
+
+    overlayMarkup = ""
+    if overlayPolylinePoints:
+        overlayMarkup = (
+            f'<polyline points="{overlayPolylinePoints}" fill="none" stroke="#7dd3fc" '
+            f'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />'
+            f'{"".join(overlayJointMarkup)}'
         )
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
@@ -100,6 +120,7 @@ def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y
   <text x="{marginLeft - 8}" y="{marginTop + 4}" text-anchor="end" fill="#77808b" font-size="10" font-family="sans-serif">{maxY:.0f}</text>
   <polyline points="{polylinePoints}" fill="none" stroke="#7dd3fc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
   {"".join(jointMarkup)}
+  {overlayMarkup}
 </svg>'''
 
 
@@ -133,16 +154,20 @@ def _toolDirectionFromJointAngles(jointAngles):
 
 class ARM_5DOF:
 
-
     def __init__(self):
         
-        linkLengths = [100, 100, 100, 100, 100]
+        linkLengths = [100, 300, 150, 40, 40]
         initialAngles = [0.0, m.pi/2, 0.0, 0.0, 0.0]
 
         self.linkLengths = linkLengths.copy()
         self.homeAngles = initialAngles.copy()
 
         self.jointAngles = initialAngles.copy()
+        self.encoderAngleOffsetsDeg = [180.0, 180.0, 180.0, 180.0, 180.0]
+        self.rawEncoderStepCounts = [None, None, None, None, None]
+
+        self.joggedJointAngles = None
+
         self.jointCoordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
         self.jointCoordinatesM = [[0.0, 0.0, 0.0], [], [], [], [], []] # non default m
 
@@ -168,6 +193,37 @@ class ARM_5DOF:
 
     def setJointAnglesDeg(self, jointAnglesDeg):
         self.setJointAnglesRad([m.radians(float(angle)) for angle in jointAnglesDeg])
+
+
+    def encoderAnglesToJointAnglesDeg(self, encoderAnglesDeg):
+        if len(encoderAnglesDeg) != 5:
+            raise ValueError(f"Expected 5 encoder angles, got {len(encoderAnglesDeg)}")
+
+        return [
+            None if angle is None else -(float(angle) - offset)
+            for angle, offset in zip(encoderAnglesDeg, self.encoderAngleOffsetsDeg)
+        ]
+
+
+    def setRawEncoderStepCounts(self, stepCounts):
+        if len(stepCounts) != 5:
+            raise ValueError(f"Expected 5 encoder step counts, got {len(stepCounts)}")
+
+        self.rawEncoderStepCounts = [
+            None if count is None else int(count)
+            for count in stepCounts
+        ]
+
+
+    def setJoggedJointAnglesRad(self, jointAngles):
+        if len(jointAngles) != 5:
+            raise ValueError(f"Expected 5 joint angles, got {len(jointAngles)}")
+
+        self.joggedJointAngles = [float(angle) for angle in jointAngles]
+
+
+    def setJoggedJointAnglesDeg(self, jointAnglesDeg):
+        self.setJoggedJointAnglesRad([m.radians(float(angle)) for angle in jointAnglesDeg])
 
 
     def setPoseMmDeg(self, targetPose):
@@ -199,8 +255,26 @@ class ARM_5DOF:
         ]
 
 
+    def forwardKinematicPoseForJointAngles(self, jointAngles):
+        jointCoordinates = self.solveFK(jointAngles)
+        endEffector = jointCoordinates[-1]
+        theta4World = jointAngles[1] + jointAngles[2] + jointAngles[3] - m.pi/2
+        return [
+            float(endEffector[0]),
+            float(endEffector[1]),
+            float(endEffector[2]),
+            m.degrees(theta4World),
+            m.degrees(jointAngles[4]),
+        ]
+
+
     def stateToDict(self):
         currentPose = self.currentForwardKinematicPose()
+        joggedJointCoordinates = None
+        joggedPose = None
+        if self.joggedJointAngles is not None:
+            joggedJointCoordinates = self.solveFK(self.joggedJointAngles)
+            joggedPose = self.forwardKinematicPoseForJointAngles(self.joggedJointAngles)
 
         return {
             "type": "robot_state",
@@ -209,6 +283,10 @@ class ARM_5DOF:
 
             "joint_angles_rad": self.jointAngles,
 
+            "raw_encoder_step_counts": self.rawEncoderStepCounts,
+
+            "encoder_angle_offsets_deg": self.encoderAngleOffsetsDeg,
+
             "joint_angles_deg": [
                 m.degrees(angle)
                 for angle in self.jointAngles
@@ -216,9 +294,31 @@ class ARM_5DOF:
 
             "joint_coordinates_m": self.jointCoordinatesM,
 
+            "jogged_joint_angles_rad": self.joggedJointAngles,
+
+            "jogged_joint_angles_deg": (
+                [
+                    m.degrees(angle)
+                    for angle in self.joggedJointAngles
+                ]
+                if self.joggedJointAngles is not None
+                else None
+            ),
+
+            "jogged_joint_coordinates_m": (
+                [
+                    [float(value) / 1000.0 for value in joint]
+                    for joint in joggedJointCoordinates
+                ]
+                if joggedJointCoordinates is not None
+                else None
+            ),
+
             "fk_pose_mm_deg": currentPose,
 
-            "link_plot_svgs": visualizeLinks(self)["plots"],
+            "jogged_fk_pose_mm_deg": joggedPose,
+
+            "link_plot_svgs": visualizeLinks(self, self.joggedJointAngles)["plots"],
 
             "status": self.status,
         }
@@ -329,10 +429,13 @@ class ARM_5DOF:
 
 
 
-def visualizeLinks(robot):
+def visualizeLinks(robot, joggedJointAngles=None):
 
     joint_coordinates = robot.solveFK(robot.jointAngles)
     plotPoints = _withoutConsecutiveDuplicates(joint_coordinates)
+    joggedPlotPoints = []
+    if joggedJointAngles is not None:
+        joggedPlotPoints = _withoutConsecutiveDuplicates(robot.solveFK(joggedJointAngles))
     totalLinkLength = sum(robot.linkLengths) + 50
 
     xyPlot = _axisPlotSvg(
@@ -343,6 +446,7 @@ def visualizeLinks(robot):
         "y (mm)",
         x_limits=(-totalLinkLength, totalLinkLength),
         y_limits=(-totalLinkLength, totalLinkLength),
+        overlay_points=joggedPlotPoints,
     )
     xzPlot = _axisPlotSvg(
         plotPoints,
@@ -355,6 +459,7 @@ def visualizeLinks(robot):
         width=640,
         height=360,
         preserveAspectRatio=True,
+        overlay_points=joggedPlotPoints,
     )
 
     return {

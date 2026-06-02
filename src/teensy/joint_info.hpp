@@ -1,5 +1,11 @@
 #pragma once
 
+constexpr int GRIPPER_PWM_MIN = 1000;
+constexpr int GRIPPER_PWM_MAX = 2000;
+
+constexpr float GRIPPER_ANG_MIN = 0.0;
+constexpr float GRIPPER_ANG_MAX = 90.0;
+
 constexpr int numJoints = 5;
 
 constexpr float limbLengths[numJoints] = {100,  300,  250,  50,   50};

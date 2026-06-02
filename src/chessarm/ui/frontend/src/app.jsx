@@ -23,6 +23,9 @@ export default function App() {
   const [linkPlotXZ, setLinkPlotXZ] = useState(null);
 
   const [robotStatus, setRobotStatus] = useState("ready");
+  const [serialStatus, setSerialStatus] = useState("unknown");
+  const [serialPort, setSerialPort] = useState("");
+  const [commandError, setCommandError] = useState("");
 
   const [jog0, setJog0] = useState("0");
   const [jog1, setJog1] = useState("0");
@@ -44,6 +47,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState("controls");
   const [slidersEnabled, setSlidersEnabled] = useState(true);
+  const poseValuesRef = useRef(["0", "0", "0", "0", "0"]);
 
   const colors = {
     bg: "#1f2328",
@@ -85,6 +89,55 @@ export default function App() {
     ...extra,
   });
 
+  const statusBoxStyle = {
+    minWidth: 132,
+    padding: "10px 12px",
+    background: colors.panelSoft,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 6,
+    boxSizing: "border-box",
+  };
+
+  const statusLabelStyle = {
+    display: "block",
+    marginBottom: 4,
+    color: colors.muted,
+    fontSize: 12,
+  };
+
+  const statusValueStyle = {
+    display: "block",
+    fontSize: 18,
+    fontWeight: 700,
+  };
+
+  const statusColor = (status) => {
+    const normalizedStatus = String(status || "").toLowerCase();
+    if (["connected", "ready"].includes(normalizedStatus)) return "#86efac";
+    if (["busy", "connecting", "unknown"].includes(normalizedStatus)) return "#fde68a";
+    if (["error", "disconnected", "stopped"].includes(normalizedStatus)) return "#fca5a5";
+    return colors.text;
+  };
+
+  const statusValueStyleFor = (status) => ({
+    ...statusValueStyle,
+    color: statusColor(status),
+  });
+
+  const zJogButtonStyle = (direction) => ({
+    width: 104,
+    height: 62,
+    border: "none",
+    background: colors.button,
+    color: colors.text,
+    cursor: robotStatus === "ready" ? "pointer" : "not-allowed",
+    clipPath: direction > 0
+      ? "polygon(50% 0%, 100% 100%, 0% 100%)"
+      : "polygon(0% 0%, 100% 0%, 50% 100%)",
+    opacity: robotStatus === "ready" ? 1 : 0.55,
+    fontWeight: 700,
+  });
+
   const jointControls = [
     { label: "J0", value: robotJoint0 },
     { label: "J1", value: robotJoint1 },
@@ -94,14 +147,14 @@ export default function App() {
   ];
 
   const wsUrl = useMemo(() => {
-    // In dev, Vite proxy handles /ws; in prod we can use absolute
-    // Using relative won't work for WS, so build it:
-    const host = window.location.host;
-    return `ws://${host}/ws`;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = import.meta.env.DEV
+      ? `${window.location.hostname}:8080`
+      : window.location.host;
+    return `${protocol}//${host}/ws`;
   }, []);
 
   useEffect(() => {
-
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -125,6 +178,17 @@ export default function App() {
           setFrame3(toUrl(msg.displayTiles["2"]));
           setFrame4(toUrl(msg.displayTiles["3"]));
         }
+
+        else if (msg.type === "ack")
+        {
+          setCommandError(msg.ok ? "" : (msg.reason || "Command failed"));
+        }
+
+        else if (msg.type === "serial_state")
+        {
+          setSerialStatus(msg.status || "unknown");
+          setSerialPort(msg.port || "");
+        }
         
         // update robot state
         else if (msg.type === "robot_state")
@@ -137,19 +201,26 @@ export default function App() {
             setRobotJoint2(nextJoints[2]);
             setRobotJoint3(nextJoints[3]);
             setRobotJoint4(nextJoints[4]);
-            setJog0(nextJoints[0]);
-            setJog1(nextJoints[1]);
-            setJog2(nextJoints[2]);
-            setJog3(nextJoints[3]);
-            setJog4(nextJoints[4]);
+
+            const joggedJoints = Array.isArray(msg.jogged_joint_angles_deg) && msg.jogged_joint_angles_deg.length >= 5
+              ? msg.jogged_joint_angles_deg.map((value) => formatFieldValue(Number(value)))
+              : nextJoints;
+            setJog0(joggedJoints[0]);
+            setJog1(joggedJoints[1]);
+            setJog2(joggedJoints[2]);
+            setJog3(joggedJoints[3]);
+            setJog4(joggedJoints[4]);
           }
 
-          if (Array.isArray(msg.fk_pose_mm_deg) && msg.fk_pose_mm_deg.length >= 5) {
-            setPose0(formatFieldValue(Number(msg.fk_pose_mm_deg[0])));
-            setPose1(formatFieldValue(Number(msg.fk_pose_mm_deg[1])));
-            setPose2(formatFieldValue(Number(msg.fk_pose_mm_deg[2])));
-            setPose3(formatFieldValue(Number(msg.fk_pose_mm_deg[3])));
-            setPose4(formatFieldValue(Number(msg.fk_pose_mm_deg[4])));
+          const displayedPose = Array.isArray(msg.jogged_fk_pose_mm_deg) && msg.jogged_fk_pose_mm_deg.length >= 5
+            ? msg.jogged_fk_pose_mm_deg
+            : msg.fk_pose_mm_deg;
+          if (Array.isArray(displayedPose) && displayedPose.length >= 5) {
+            setPose0(formatFieldValue(Number(displayedPose[0])));
+            setPose1(formatFieldValue(Number(displayedPose[1])));
+            setPose2(formatFieldValue(Number(displayedPose[2])));
+            setPose3(formatFieldValue(Number(displayedPose[3])));
+            setPose4(formatFieldValue(Number(displayedPose[4])));
           }
 
           if (msg.link_plot_svgs) {
@@ -167,6 +238,10 @@ export default function App() {
       ws.close();
     };
   }, [wsUrl]);
+
+  useEffect(() => {
+    poseValuesRef.current = [pose0, pose1, pose2, pose3, pose4];
+  }, [pose0, pose1, pose2, pose3, pose4]);
 
   function sendCmd(cmd, args = {}) {
     const ws = wsRef.current;
@@ -188,11 +263,24 @@ export default function App() {
     });
   }
 
+  function jogPoseValues(nextPoseValues) {
+    sendCmd("jog_pose", {
+      pose: nextPoseValues.map((poseValue) => Number(poseValue || 0)),
+    });
+  }
+
+  function stepZJog(direction, magnitude) {
+    const nextPoseValues = [...poseValuesRef.current];
+    const nextZ = Math.round((Number(nextPoseValues[2] || 0) + direction * magnitude) * 10) / 10;
+    nextPoseValues[2] = String(nextZ);
+    poseValuesRef.current = nextPoseValues;
+    setPose2(nextPoseValues[2]);
+    jogPoseValues(nextPoseValues);
+  }
+
   return (
 
     <div style={{ fontFamily: "sans-serif", padding: 16, minHeight: "100vh", background: colors.bg, color: colors.text }}>
-      <h2>Chessbot UI</h2>
-
       <div
         role="tablist"
         aria-label="Chessbot views"
@@ -225,25 +313,37 @@ export default function App() {
       {activeTab === "controls" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 24, alignItems: "flex-start" }}>
         
-        <div style={{ width: 320, background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 16 }}>
+        <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 16 }}>
 
           <div
             style={{
               display: "flex",
-              flexDirection: "column",
-              gap: 20,
-              alignItems: "flex-start",
-              marginBottom: 12,
+              gap: 12,
+              alignItems: "stretch",
+              flexWrap: "wrap",
             }}
           >
-            <span style={{ fontSize: 18, display: "block", marginBottom: 0 }}>
-              Interface: <b>{wsStatus}</b>
-            </span>
+            <div style={statusBoxStyle}>
+              <span style={statusLabelStyle}>Interface</span>
+              <span style={statusValueStyleFor(wsStatus)}>{wsStatus}</span>
+            </div>
 
-            <span style={{ fontSize: 18, display: "block", marginBottom: 8 }}>
-              Robot status: <b>{robotStatus}</b>
-            </span>
+            <div style={statusBoxStyle} title={serialPort ? `Serial port: ${serialPort}` : ""}>
+              <span style={statusLabelStyle}>Serial</span>
+              <span style={statusValueStyleFor(serialStatus)}>{serialStatus}</span>
+            </div>
+
+            <div style={statusBoxStyle}>
+              <span style={statusLabelStyle}>Robot</span>
+              <span style={statusValueStyleFor(robotStatus)}>{robotStatus}</span>
+            </div>
           </div>
+
+          {commandError && (
+            <div style={{ color: "#fca5a5", fontSize: 14, marginTop: 12 }}>
+              {commandError}
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", justifyContent: "flex-start", width: "100%" }}>
@@ -363,8 +463,8 @@ export default function App() {
                 <input
                   id={`${joint.label}-slider`}
                   type="range"
-                  min="0"
-                  max="360"
+                  min="-180"
+                  max="180"
                   step="1"
                   value={Number(joint.value || 0)}
                   onChange={(e) => {
@@ -431,6 +531,44 @@ export default function App() {
           </button>
         </div>
 
+        <div
+          style={{
+            background: colors.panel,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            padding: 16,
+            order: 4,
+            width: 180,
+          }}
+        >
+          <h3 style={{ textAlign: "center", marginTop: 0 }}>Z jog</h3>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", width: "100%" }}>
+            {[
+              { direction: 1, magnitude: 1 },
+              { direction: 1, magnitude: 5 },
+              { direction: 1, magnitude: 10 },
+              { direction: -1, magnitude: 1 },
+              { direction: -1, magnitude: 5 },
+              { direction: -1, magnitude: 10 },
+            ].map((control) => (
+                <button
+                  key={`${control.direction}-${control.magnitude}`}
+                  type="button"
+                  aria-label={`${control.direction > 0 ? "+Z" : "-Z"} ${control.magnitude} mm`}
+                  title={`${control.direction > 0 ? "+Z" : "-Z"} ${control.magnitude} mm`}
+                  onClick={() => stepZJog(control.direction, control.magnitude)}
+                  style={zJogButtonStyle(control.direction)}
+                  disabled={robotStatus !== "ready"}
+                >
+                  <span style={{ display: "block", transform: control.direction > 0 ? "translateY(13px)" : "translateY(-13px)" }}>
+                    {control.direction > 0 ? "+" : "-"}{control.magnitude}mm
+                  </span>
+                </button>
+            ))}
+          </div>
+        </div>
+
         <div 
           style={{ 
             background: colors.panel,
@@ -479,7 +617,7 @@ export default function App() {
             </div>
               
             <div style={{ display: "grid", gridTemplateColumns: "34px 1fr", alignItems: "center", gap: 8 }}>
-              <label htmlFor="R">R:</label>
+              <label htmlFor="P">P:</label>
               <input
                 type="number"
                 step="0.1"
@@ -490,7 +628,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "34px 1fr", alignItems: "center", gap: 8 }}>
-              <label htmlFor="P">P:</label>
+              <label htmlFor="R">R:</label>
               <input
                 type="number"
                 step="0.1"

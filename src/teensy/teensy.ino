@@ -12,6 +12,9 @@
 #include <cmath>
 #include <vector>
 
+#include <Servo.h>
+Servo gripper; 
+
 
 /* joint stuff */
 constexpr int homeJointSteps[numJoints]    = {0,   0,   0,   0,   0};
@@ -21,6 +24,7 @@ constexpr float homePose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
 int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
+float currentEncoderAngles[numJoints];
 
 int enaFlags[numJoints] = {0, 0, 0, 0, 0};
 
@@ -36,73 +40,11 @@ bool newCommand = false;
 
 
 
-void setup() 
-{
-  Serial.begin(921600);
-
-  Serial.print("\n");
-  Serial.println("< NEW PROGRAM >");
-  Serial.print("\n");
-
-  pinMode(pul0, OUTPUT);
-  pinMode(dir0, OUTPUT);
-  pinMode(ena0, OUTPUT);
-
-  pinMode(pul1, OUTPUT);
-  pinMode(dir1, OUTPUT);
-  pinMode(ena1, OUTPUT);
-
-  pinMode(pul2, OUTPUT);
-  pinMode(dir2, OUTPUT);
-  pinMode(ena2, OUTPUT);
-
-  pinMode(pul3, OUTPUT);
-  pinMode(dir3, OUTPUT);
-  pinMode(ena3, OUTPUT);
-
-  pinMode(pul4, OUTPUT);
-  pinMode(dir4, OUTPUT);
-  pinMode(ena4, OUTPUT);
-
-  for (int i = 0; i < serialBufferLength; i++)
-  {
-    serialBuffer[i].reserve(serialBufferNumBytes);
-  }
-
-  for (int i = 0; i < numJoints; i++)
-  {
-    jointDelays[i].reserve(32000);
-
-    currentJointSteps[i] = homeJointSteps[i];
-    currentJointAngles[i] = homeJointAngles[i];
-    currentPose[i] = homePose[i];
-
-    parseEnaFlags(); 
-  }
-
-  printArray("Joint lengths: ", limbLengths, numJoints);
-  populateJointInfo();
-  printFreeMemory();
-
-
-  Serial.print("\n");
-  Serial.println("< END SETUP >");
-  Serial.print("\n");
-}
-
-void loop() 
-{
-  fastSerialRead(true); // poll for incoming command
-  parseCommand(); // parse command if valid one exists in buffer
-}
-
-
-
 /*
 Reads messages in the format: <val1:val2:val3>
 assigns to global string array serialBuffer
 */
-void fastSerialRead(bool debug)
+void fastSerialRead(const bool debug = false)
 {
   uint64_t startTime = micros();
 
@@ -160,7 +102,7 @@ void fastSerialRead(bool debug)
 
 
 /*
-Calculates some constants based on robot arm parameters
+  Pre-calculates some constants based on robot arm parameters
 */
 void populateJointInfo()
 {
@@ -243,9 +185,9 @@ implementAcceleration: whether or not to use acceleration S-curve or static spee
 void jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
 {
   // check validity of movement
-  if (!checkAgainstJointLimits(desiredJointAngles)
+  if (!checkAgainstJointLimits(desiredJointAngles))
   {
-    Serial.println("")
+    Serial.println("");
     return;
   }
 
@@ -711,11 +653,42 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
 }
 
 
+float mapGripperAngle(float angle) 
+{
+  return GRIPPER_PWM_MIN + (angle / GRIPPER_ANG_MAX) * (GRIPPER_PWM_MAX - GRIPPER_PWM_MIN);
+}
+
+
+float clampGripperAngle(float angle) 
+{
+  if (angle < GRIPPER_ANG_MIN) return GRIPPER_ANG_MIN;
+  if (angle > GRIPPER_ANG_MAX) return GRIPPER_ANG_MAX;
+  return angle;
+}
+
+
+
+void setGripperAngle(const float angle)
+{
+  // calculate pwm setpoint
+  float angle_clamped = clampGripperAngle(angle);
+  float pwm_setpt = mapGripperAngle(angle_clamped);
+
+  gripper.writeMicroseconds((int)pwm_setpt);
+
+  Serial.print("Wrote gripper angle: ");
+  Serial.print(angle_clamped);
+  Serial.print(" -> pwm setpoint: ");
+  Serial.print(pwm_setpt);
+  Serial.println("us");
+}
+
+
 
 /*
 Acts on serialBuffer global array of commands
 */
-void parseCommand()
+void parseCommand(const bool debug = false)
 {
   if (!newCommand) return;
 
@@ -810,6 +783,34 @@ void parseCommand()
       break;
     }
 
+    case serialCommand::ENCODER_ANGLE_UPDATE:
+    {
+      for (int i = 0; i < numJoints; i++)
+      {
+        if (serialBuffer[i+1].length() > 0) 
+        {
+          currentEncoderAngles[i] = serialBuffer[i+1].toFloat();
+        }
+      }
+
+      if (debug)
+      {
+        printArray("Updated encoder angles: ", currentEncoderAngles, numJoints);
+      }
+
+      break;
+    }
+
+    case serialCommand::GRIPPER_SET_ANGLE:
+    {
+      Serial.println("Received set gripper angle command");
+      float angle = serialBuffer[1].toFloat();
+
+      setGripperAngle(angle);
+
+      break;
+    }
+
     default:
     {
       Serial.println("Received unknown command signature");
@@ -838,4 +839,87 @@ void printFreeMemory()
 
   // The difference is (approximately) the free, available ram.
   Serial.println("Free RAM: " + String(stackTop - heapTop) + String("B"));
+}
+
+
+/*
+  request joint angles from encoders connected to raspberry pi
+*/
+void requestJointAngles()
+{
+  // send request
+  //Serial.write("<" + String(int(serialCommand::REQUEST_ENCODER_ANGLE_UPDATE)) + ">");
+}
+
+
+
+
+
+
+
+
+void setup() 
+{
+  Serial.begin(921600);
+
+  Serial.print("\n");
+  Serial.println("[ NEW PROGRAM ]");
+  Serial.print("\n");
+
+  pinMode(pul0, OUTPUT);
+  pinMode(dir0, OUTPUT);
+  pinMode(ena0, OUTPUT);
+
+  pinMode(pul1, OUTPUT);
+  pinMode(dir1, OUTPUT);
+  pinMode(ena1, OUTPUT);
+
+  pinMode(pul2, OUTPUT);
+  pinMode(dir2, OUTPUT);
+  pinMode(ena2, OUTPUT);
+
+  pinMode(pul3, OUTPUT);
+  pinMode(dir3, OUTPUT);
+  pinMode(ena3, OUTPUT);
+
+  pinMode(pul4, OUTPUT);
+  pinMode(dir4, OUTPUT);
+  pinMode(ena4, OUTPUT);
+
+  gripper.attach(GRIPPER_PWM_PIN, GRIPPER_PWM_MIN, GRIPPER_PWM_MAX);
+
+
+  // reserve n bytes @ each address of serialBuffer
+  for (int i = 0; i < serialBufferLength; i++)
+  {
+    serialBuffer[i].reserve(serialBufferNumBytes);
+  }
+
+  // 
+  for (int i = 0; i < numJoints; i++)
+  {
+    jointDelays[i].reserve(32000);
+
+    currentJointSteps[i] = homeJointSteps[i];
+    currentJointAngles[i] = homeJointAngles[i];
+    currentPose[i] = homePose[i];
+
+    parseEnaFlags(); 
+  }
+
+  printArray("Link lengths: ", limbLengths, numJoints);
+  populateJointInfo();
+  printFreeMemory();
+
+
+  Serial.print("\n");
+  Serial.println("< END SETUP >");
+  Serial.print("\n");
+}
+
+void loop() 
+{
+  const bool debug = true;
+  fastSerialRead(debug); // poll for incoming command
+  parseCommand(debug); // parse command if valid one exists in buffer
 }
