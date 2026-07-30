@@ -15,6 +15,7 @@ np.set_printoptions(suppress=True, precision=2)
 
 
 def _axisPlotSvg(points, axis_indices, title, x_label, y_label, x_limits=None, y_limits=None, width=360, height=360, preserveAspectRatio=False, overlay_points=None):
+
     marginLeft = 54
     marginRight = 34
     marginTop = 34
@@ -155,15 +156,29 @@ def _toolDirectionFromJointAngles(jointAngles):
 class ARM_5DOF:
 
     def __init__(self):
-        
-        linkLengths = [100, 300, 150, 40, 40]
-        initialAngles = [0.0, m.pi/2, 0.0, 0.0, 0.0]
+
+        # lengths of each arm link in mm
+        # L0 = distance from robot coordinate system origin to z axis of J1
+        linkLengths = [142.22, 265.0, 200, 0.0, 38.0]
+
+        # home angles
+        initialAngles = [0.0, m.pi/2, -m.pi/2, m.pi/2, 0.0]
 
         self.linkLengths = linkLengths.copy()
         self.homeAngles = initialAngles.copy()
 
         self.jointAngles = initialAngles.copy()
-        self.encoderAngleOffsetsDeg = [180.0, 180.0, 180.0, 180.0, 180.0]
+
+        # difference between what the encoders read vs what they SHOULD read
+        # in any of the arm's positions
+        # these two offsets are added together then subtracted from incoming encoder readings
+
+        self.encoderReverseRange = [1, 0, 0, 0, 0]
+
+        #self.encoderAngleDefaultOffsetDeg = [180.0, 180.0, 180.0, 180.0, 180.0]
+
+        self.encoderAngleCalibrationOffsetDeg = [183.0, 88.522, 288.5, 87.1, 0.0]
+
         self.rawEncoderStepCounts = [None, None, None, None, None]
 
         self.joggedJointAngles = None
@@ -171,10 +186,14 @@ class ARM_5DOF:
         self.jointCoordinates = [[0.0, 0.0, 0.0], [], [], [], [], []] # default mm
         self.jointCoordinatesM = [[0.0, 0.0, 0.0], [], [], [], [], []] # non default m
 
+        # dh parameters
         self.dhParams = {}
         self.dhParams["alpha"] = [m.pi/2, 0.0, 0.0, m.pi/2, 0.0]
         self.dhParams["d"] = [linkLengths[0], 0.0, 0.0, 0.0, linkLengths[3]]
         self.dhParams["a"] = [0.0, linkLengths[1], linkLengths[2], 0.0, 0.0]
+
+
+        self.encoderOffsetSteps = [0.0, 0.0, 0.0, 0.0, 0.0]
 
         self.status = "ready"
 
@@ -195,14 +214,33 @@ class ARM_5DOF:
         self.setJointAnglesRad([m.radians(float(angle)) for angle in jointAnglesDeg])
 
 
-    def encoderAnglesToJointAnglesDeg(self, encoderAnglesDeg):
-        if len(encoderAnglesDeg) != 5:
-            raise ValueError(f"Expected 5 encoder angles, got {len(encoderAnglesDeg)}")
 
-        return [
-            None if angle is None else -(float(angle) - offset)
-            for angle, offset in zip(encoderAnglesDeg, self.encoderAngleOffsetsDeg)
-        ]
+
+    def encoderStepsToJointAnglesDeg(self, encoderSteps):
+
+        if len(encoderSteps) != 5:
+            raise ValueError(f"Expected 5 encoder stepcounts, got {len(encoderSteps)}")
+
+        ret = []
+
+        for stepCount, revRange, calibrationOffset in zip(
+            encoderSteps,
+            self.encoderReverseRange,
+            self.encoderAngleCalibrationOffsetDeg):
+
+            if stepCount is None:
+                ret.append(None)
+                continue
+
+            if revRange:
+                stepCount = 4096 - stepCount
+
+            jointAngle = float(stepCount) * 360.0 / 4096.0 - calibrationOffset
+
+            ret.append(jointAngle)
+
+        return ret
+    
 
 
     def setRawEncoderStepCounts(self, stepCounts):
@@ -285,7 +323,9 @@ class ARM_5DOF:
 
             "raw_encoder_step_counts": self.rawEncoderStepCounts,
 
-            "encoder_angle_offsets_deg": self.encoderAngleOffsetsDeg,
+            #"encoder_angle_default_offset_deg": self.encoderAngleDefaultOffsetDeg,
+
+            "encoder_angle_calibration_offset_deg": self.encoderAngleCalibrationOffsetDeg,
 
             "joint_angles_deg": [
                 m.degrees(angle)

@@ -9,6 +9,12 @@ function formatFieldValue(value) {
   return String(Math.round(value * 10) / 10);
 }
 
+function formatStepValue(value) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "--";
+  return String(Math.round(numberValue));
+}
+
 function clickToSquare(event) {
   const boardImageElement = event.currentTarget.querySelector("img");
   const rect = (boardImageElement ?? event.currentTarget).getBoundingClientRect();
@@ -87,6 +93,7 @@ export default function App() {
   const [robotJoint2, setRobotJoint2] = useState("0");
   const [robotJoint3, setRobotJoint3] = useState("0");
   const [robotJoint4, setRobotJoint4] = useState("0");
+  const [rawEncoderSteps, setRawEncoderSteps] = useState(["--", "--", "--", "--", "--"]);
 
   const [pose0, setPose0] = useState("0");
   const [pose1, setPose1] = useState("0");
@@ -95,8 +102,6 @@ export default function App() {
   const [pose4, setPose4] = useState("0");
 
   const [activeTab, setActiveTab] = useState("home");
-  const [slidersEnabled, setSlidersEnabled] = useState(true);
-  const poseValuesRef = useRef(["0", "0", "0", "0", "0"]);
 
   const colors = {
     bg: "#1f2328",
@@ -173,26 +178,12 @@ export default function App() {
     color: statusColor(status),
   });
 
-  const zJogButtonStyle = (direction) => ({
-    width: 104,
-    height: 62,
-    border: "none",
-    background: colors.button,
-    color: colors.text,
-    cursor: robotStatus === "ready" ? "pointer" : "not-allowed",
-    clipPath: direction > 0
-      ? "polygon(50% 0%, 100% 100%, 0% 100%)"
-      : "polygon(0% 0%, 100% 0%, 50% 100%)",
-    opacity: robotStatus === "ready" ? 1 : 0.55,
-    fontWeight: 700,
-  });
-
   const jointControls = [
-    { label: "J0", value: robotJoint0 },
-    { label: "J1", value: robotJoint1 },
-    { label: "J2", value: robotJoint2 },
-    { label: "J3", value: robotJoint3 },
-    { label: "J4", value: robotJoint4 },
+    { label: "J0", value: robotJoint0, steps: rawEncoderSteps[0] },
+    { label: "J1", value: robotJoint1, steps: rawEncoderSteps[1] },
+    { label: "J2", value: robotJoint2, steps: rawEncoderSteps[2] },
+    { label: "J3", value: robotJoint3, steps: rawEncoderSteps[3] },
+    { label: "J4", value: robotJoint4, steps: rawEncoderSteps[4] },
   ];
 
   const wsUrl = useMemo(() => {
@@ -253,6 +244,10 @@ export default function App() {
         else if (msg.type === "robot_state")
         {
           setRobotStatus(msg.status);
+          if (Array.isArray(msg.raw_encoder_step_counts) && msg.raw_encoder_step_counts.length >= 5) {
+            setRawEncoderSteps(msg.raw_encoder_step_counts.slice(0, 5).map(formatStepValue));
+          }
+
           if (Array.isArray(msg.joint_angles_deg) && msg.joint_angles_deg.length >= 5) {
             const nextJoints = msg.joint_angles_deg.map((value) => formatFieldValue(Number(value)));
             setRobotJoint0(nextJoints[0]);
@@ -298,10 +293,6 @@ export default function App() {
     };
   }, [wsUrl]);
 
-  useEffect(() => {
-    poseValuesRef.current = [pose0, pose1, pose2, pose3, pose4];
-  }, [pose0, pose1, pose2, pose3, pose4]);
-
   function sendCmd(cmd, args = {}) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -339,21 +330,6 @@ export default function App() {
     sendCmd("set_joint_angles", {
       joint_angles: nextValues.map((jointValue) => Number(jointValue || 0)),
     });
-  }
-
-  function jogPoseValues(nextPoseValues) {
-    sendCmd("jog_pose", {
-      pose: nextPoseValues.map((poseValue) => Number(poseValue || 0)),
-    });
-  }
-
-  function stepZJog(direction, magnitude) {
-    const nextPoseValues = [...poseValuesRef.current];
-    const nextZ = Math.round((Number(nextPoseValues[2] || 0) + direction * magnitude) * 10) / 10;
-    nextPoseValues[2] = String(nextZ);
-    poseValuesRef.current = nextPoseValues;
-    setPose2(nextPoseValues[2]);
-    jogPoseValues(nextPoseValues);
   }
 
   return (
@@ -686,11 +662,18 @@ export default function App() {
             flexDirection: "column",
           }}
         >
-          <h3 style={{ textAlign: "center", marginTop: 0 }}>Joint sliders (deg)</h3>
+          <h3 style={{ textAlign: "center", marginTop: 0 }}>Joint sliders</h3>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "32px 1fr 56px 56px", gap: 10, alignItems: "center", fontSize: 12, color: colors.muted }}>
+              <span />
+              <span />
+              <span style={{ textAlign: "right" }}>deg</span>
+              <span style={{ textAlign: "right" }}>steps</span>
+            </div>
+
             {jointControls.map((joint, index) => (
-              <div key={joint.label} style={{ display: "grid", gridTemplateColumns: "32px 1fr 42px", gap: 10, alignItems: "center", minHeight: 35 }}>
+              <div key={joint.label} style={{ display: "grid", gridTemplateColumns: "32px 1fr 56px 56px", gap: 10, alignItems: "center", minHeight: 35 }}>
                 <label htmlFor={`${joint.label}-slider`}>{joint.label}</label>
                 <input
                   id={`${joint.label}-slider`}
@@ -699,104 +682,19 @@ export default function App() {
                   max="180"
                   step="1"
                   value={Number(joint.value || 0)}
-                  onChange={(e) => {
-                    if (slidersEnabled) updateJointValue(index, e.target.value);
-                  }}
+                  onChange={(e) => updateJointValue(index, e.target.value)}
                   style={{
                     width: "100%",
-                    opacity: slidersEnabled ? 1 : 0.55,
-                    cursor: slidersEnabled ? "pointer" : "not-allowed",
+                    cursor: "pointer",
                   }}
                 />
-                <span style={{ color: colors.muted, textAlign: "right" }}>
+                <span title="Joint angle degrees" style={{ color: colors.muted, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                   {Number(joint.value || 0)}
                 </span>
+                <span title="Raw encoder steps" style={{ color: colors.muted, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {joint.steps}
+                </span>
               </div>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setSlidersEnabled((enabled) => !enabled)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-              marginTop: 16,
-              padding: 0,
-              width: "100%",
-              background: "transparent",
-              color: colors.text,
-              border: "none",
-              cursor: "pointer",
-            }}
-            aria-pressed={slidersEnabled}
-            aria-label="Toggle slider joint control"
-          >
-            <span style={{ fontSize: 13 }}>Sliders control joints</span>
-            <span
-              aria-hidden="true"
-              style={{
-                position: "relative",
-                display: "inline-flex",
-                alignItems: "center",
-                width: 54,
-                height: 26,
-                padding: 3,
-                borderRadius: 999,
-                background: slidersEnabled ? "#22c55e" : "#47505a",
-                transition: "background 120ms ease",
-              }}
-            >
-              <span
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: "50%",
-                  background: "#f0f3f6",
-                  transform: slidersEnabled ? "translateX(28px)" : "translateX(0)",
-                  transition: "transform 120ms ease",
-                }}
-              />
-            </span>
-          </button>
-        </div>
-
-        <div
-          style={{
-            background: colors.panel,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 8,
-            padding: 16,
-            order: 4,
-            width: 180,
-          }}
-        >
-          <h3 style={{ textAlign: "center", marginTop: 0 }}>Z jog</h3>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", width: "100%" }}>
-            {[
-              { direction: 1, magnitude: 1 },
-              { direction: 1, magnitude: 5 },
-              { direction: 1, magnitude: 10 },
-              { direction: -1, magnitude: 1 },
-              { direction: -1, magnitude: 5 },
-              { direction: -1, magnitude: 10 },
-            ].map((control) => (
-                <button
-                  key={`${control.direction}-${control.magnitude}`}
-                  type="button"
-                  aria-label={`${control.direction > 0 ? "+Z" : "-Z"} ${control.magnitude} mm`}
-                  title={`${control.direction > 0 ? "+Z" : "-Z"} ${control.magnitude} mm`}
-                  onClick={() => stepZJog(control.direction, control.magnitude)}
-                  style={zJogButtonStyle(control.direction)}
-                  disabled={robotStatus !== "ready"}
-                >
-                  <span style={{ display: "block", transform: control.direction > 0 ? "translateY(13px)" : "translateY(-13px)" }}>
-                    {control.direction > 0 ? "+" : "-"}{control.magnitude}mm
-                  </span>
-                </button>
             ))}
           </div>
         </div>

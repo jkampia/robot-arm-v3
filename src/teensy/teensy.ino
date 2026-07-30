@@ -13,7 +13,11 @@
 #include <vector>
 
 #include <Servo.h>
+#include <Wire.h>
+#include <AS5600.h>
+
 Servo gripper; 
+AS5600 encoder;
 
 
 /* joint stuff */
@@ -24,6 +28,8 @@ constexpr float homePose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
 int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
 float currentPose[numJoints];
+
+uint16_t currentEncoderSteps[numJoints];
 float currentEncoderAngles[numJoints];
 
 int enaFlags[numJoints] = {0, 0, 0, 0, 0};
@@ -31,6 +37,11 @@ int enaFlags[numJoints] = {0, 0, 0, 0, 0};
 JointInfo jointInfo[numJoints];
 
 std::vector<uint16_t> jointDelays[numJoints];
+
+
+/* AS5600 encoders on TCA9548A mux */
+constexpr uint8_t TCA9548A_ADDR = 0x70;
+constexpr uint8_t encoderMuxChannels[numJoints] = {2, 3, 4, 5, 6};
 
 
 /* serial */
@@ -41,7 +52,7 @@ bool newCommand = false;
 
 
 /*
-Reads messages in the format: <val1:val2:val3>
+Reads messages in the format: <val1:val2:val3:Xxx>
 assigns to global string array serialBuffer
 */
 void fastSerialRead(const bool debug = false)
@@ -91,7 +102,7 @@ void fastSerialRead(const bool debug = false)
       serialBuffer[bufferIndex] += inbyte;   
       if (serialBuffer[bufferIndex].length() > serialBufferNumBytes)
       {
-        Serial.println("Message segment exceeds " + String(serialBufferNumBytes) + " bytes");
+        Serial.println("Message segment exceeded " + String(serialBufferNumBytes) + " bytes");
         break;
       }
     }
@@ -104,7 +115,7 @@ void fastSerialRead(const bool debug = false)
 /*
   Pre-calculates some constants based on robot arm parameters
 */
-void populateJointInfo()
+void precalculateJointInfo()
 {
   for (int i = 0; i < numJoints; i++)
   {
@@ -685,6 +696,112 @@ void setGripperAngle(const float angle)
 
 
 
+
+bool selectEncoderMuxChannel(const uint8_t channel)
+{
+  if (channel > 7) return false;
+
+  Wire.beginTransmission(TCA9548A_ADDR);
+  Wire.write(uint8_t(1 << channel));
+  bool channelSelected = Wire.endTransmission() == 0;
+  delayMicroseconds(10);
+  return channelSelected;
+}
+
+
+bool initializeEncoders(const bool debug = false)
+{
+  bool allEncodersOk = true;
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    bool encoderOk = selectEncoderMuxChannel(encoderMuxChannels[i]) && encoder.begin();
+
+    if (!encoderOk)
+    {
+      allEncodersOk = false;
+      if (debug)
+      {
+        Serial.println("WARNING: AS5600 not detected on TCA9548A channel " + String(encoderMuxChannels[i]));
+      }
+    }
+  }
+
+  return allEncodersOk;
+}
+
+
+/*
+Reads 5 AS5600 encoders connected to TCA9548A channels SD2-SD6.
+Output angles are in degrees.
+*/
+bool readEncoderAngles(const bool debug = false)
+{
+  uint32_t startTimeUs = micros();
+  bool allReadsOk = true;
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    bool readOk = selectEncoderMuxChannel(encoderMuxChannels[i]) && encoder.isConnected();
+
+    if (readOk)
+    {
+      uint16_t encoderSteps = encoder.rawAngle();
+      readOk = encoder.lastError() == AS5600_OK;
+
+      if (readOk)
+      {
+        currentEncoderSteps[i] = encoderSteps;
+        currentEncoderAngles[i] = float(currentEncoderSteps[i]) * 360.0 / 4096.0;
+      }
+    }
+
+    if (!readOk)
+    {
+      allReadsOk = false;
+      /*
+      if (debug)
+      {
+        Serial.println("Failed to read AS5600 on TCA9548A channel " + String(encoderMuxChannels[i]));
+      }
+      */
+    }
+  }
+  uint32_t elapsedTimeUs = micros() - startTimeUs;
+
+  if (debug)
+  {
+    printArray("New encoder steps: ", currentEncoderSteps, numJoints);
+    printArray("New encoder angles: ", currentEncoderAngles, numJoints);
+    Serial.println("Read encoder angles in " + String(elapsedTimeUs) + " us");
+  }
+
+  return allReadsOk;
+}
+
+
+void sendEncoderAngleUpdate()
+{
+  Serial.print("<");
+  Serial.print(int(serialCommand::ENCODER_ANGLE_UPDATE));
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    Serial.print(":");
+    Serial.print(currentEncoderAngles[i], 4);
+  }
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    Serial.print(":");
+    Serial.print(currentEncoderSteps[i]);
+  }
+
+  Serial.print(">");
+}
+
+
+
 /*
 Acts on serialBuffer global array of commands
 */
@@ -783,21 +900,10 @@ void parseCommand(const bool debug = false)
       break;
     }
 
-    case serialCommand::ENCODER_ANGLE_UPDATE:
+    case serialCommand::REQUEST_ENCODER_ANGLE_UPDATE:
     {
-      for (int i = 0; i < numJoints; i++)
-      {
-        if (serialBuffer[i+1].length() > 0) 
-        {
-          currentEncoderAngles[i] = serialBuffer[i+1].toFloat();
-        }
-      }
-
-      if (debug)
-      {
-        printArray("Updated encoder angles: ", currentEncoderAngles, numJoints);
-      }
-
+      readEncoderAngles();
+      sendEncoderAngleUpdate();
       break;
     }
 
@@ -823,6 +929,9 @@ void parseCommand(const bool debug = false)
 }
 
 
+
+
+
 void printFreeMemory()
 { 
   // for Teensy 3.0
@@ -842,15 +951,6 @@ void printFreeMemory()
 }
 
 
-/*
-  request joint angles from encoders connected to raspberry pi
-*/
-void requestJointAngles()
-{
-  // send request
-  //Serial.write("<" + String(int(serialCommand::REQUEST_ENCODER_ANGLE_UPDATE)) + ">");
-}
-
 
 
 
@@ -863,8 +963,18 @@ void setup()
   Serial.begin(921600);
 
   Serial.print("\n");
-  Serial.println("[ NEW PROGRAM ]");
+  Serial.println("[SETUP]");
   Serial.print("\n");
+
+  // TCA9548A encoder i2c bus encoder setup
+
+  Wire.setSDA(18);
+  Wire.setSCL(19);
+  Wire.begin();
+  Wire.setClock(400000);
+  initializeEncoders(true);
+
+  // set motor output pins
 
   pinMode(pul0, OUTPUT);
   pinMode(dir0, OUTPUT);
@@ -895,7 +1005,7 @@ void setup()
     serialBuffer[i].reserve(serialBufferNumBytes);
   }
 
-  // 
+  // reserve memory for joint movement delay storage & copy all joint values into storage
   for (int i = 0; i < numJoints; i++)
   {
     jointDelays[i].reserve(32000);
@@ -908,18 +1018,22 @@ void setup()
   }
 
   printArray("Link lengths: ", limbLengths, numJoints);
-  populateJointInfo();
+  precalculateJointInfo();
   printFreeMemory();
 
 
   Serial.print("\n");
-  Serial.println("< END SETUP >");
+  Serial.println("[END SETUP]");
   Serial.print("\n");
 }
 
 void loop() 
 {
-  const bool debug = true;
+  const bool debug = false;
+
   fastSerialRead(debug); // poll for incoming command
   parseCommand(debug); // parse command if valid one exists in buffer
+
+  readEncoderAngles(debug);
+  sendEncoderAngleUpdate(); 
 }

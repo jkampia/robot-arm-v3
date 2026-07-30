@@ -25,6 +25,10 @@ app = FastAPI()
 
 SERIAL_UTILS_HEADER = srcDir / "teensy" / "serial_utils.hpp"
 
+SERIAL_READ_RATE = 200
+SERIAL_READ_DELAY = 1/SERIAL_READ_RATE
+AS5600_RESOLUTION = 4096
+
 
 def parseCppEnum(headerPath: Path, enumName: str) -> Dict[str, int]:
     text = headerPath.read_text()
@@ -79,11 +83,14 @@ class SerialConnectionManager:
         self._stop = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
+        self._loop = None
+        self._rxBuffer = ""
 
-    def start(self):
+    def start(self, loop: asyncio.AbstractEventLoop | None = None):
         if self._thread and self._thread.is_alive():
             return
 
+        self._loop = loop
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._connect,
@@ -120,6 +127,105 @@ class SerialConnectionManager:
             self.status = status
             self.error = error
 
+    def _readAvailableFrames(self):
+
+        if self.connection is None or not self.connection.is_open:
+            return False
+
+        try:
+            waiting = self.connection.in_waiting
+        except Exception as exc:
+            print(f"serial read skipped: {exc}")
+            self._rxBuffer = ""
+            return True
+
+        if waiting <= 0:
+            return True
+
+        try:
+            data = self.connection.read(waiting)
+        except Exception as exc:
+            print(f"serial read skipped: {exc}")
+            self._rxBuffer = ""
+            return True
+
+        if not data:
+            return True
+
+        self._rxBuffer += data.decode("ascii", errors="ignore")
+
+        while True:
+            frameStart = self._rxBuffer.find("<")
+            if frameStart == -1:
+                self._rxBuffer = ""
+                return True
+
+            if frameStart > 0:
+                self._rxBuffer = self._rxBuffer[frameStart:]
+
+            frameEnd = self._rxBuffer.find(">", 1)
+            if frameEnd == -1:
+                if len(self._rxBuffer) > 4096:
+                    self._rxBuffer = self._rxBuffer[-4096:]
+                return True
+
+            frame = self._rxBuffer[1:frameEnd]
+            self._rxBuffer = self._rxBuffer[frameEnd + 1:]
+            self._handleFrame(frame)
+
+
+    def _handleFrame(self, frame: str):
+
+        parts = frame.split(":")
+        #print(parts)
+        
+        if not parts or not parts[0]:
+            return
+
+        try:
+            command = int(parts[0])
+        except ValueError:
+            return
+
+        if command == serialCommands.get("ENCODER_ANGLE_UPDATE"):
+            self._handleEncoderAngleUpdate(parts[1:])
+
+
+    def _handleEncoderAngleUpdate(self, values):
+        if len(values) < 5:
+            return
+
+        try:
+            anglesDeg = [float(value) for value in values[:5]]
+            stepCounts = (
+                [int(float(value)) for value in values[5:10]]
+                if len(values) >= 10
+                else [
+                    round((angle % 360.0) * AS5600_RESOLUTION / 360.0) % AS5600_RESOLUTION
+                    for angle in anglesDeg
+                ]
+            )
+        except ValueError:
+            return
+
+        with robotLock:
+            robot.setRawEncoderStepCounts(stepCounts)
+            jointAnglesDeg = robot.encoderStepsToJointAnglesDeg(stepCounts)
+            currentAnglesDeg = [
+                math.degrees(angle)
+                for angle in robot.jointAngles
+            ]
+            nextAnglesDeg = [
+                current if angle is None else float(angle)
+                for current, angle in zip(currentAnglesDeg, jointAnglesDeg)
+            ]
+            if nextAnglesDeg != currentAnglesDeg:
+                robot.setJointAnglesDeg(nextAnglesDeg)
+            message = robot.stateToDict()
+
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(broadcast(message), self._loop)
+
     def _connect(self):
         self._setStatus("connecting")
         try:
@@ -134,9 +240,11 @@ class SerialConnectionManager:
             self._setStatus("connected")
             print(f"serial connected: {self.port} @ {self.baudrate}")
 
-            while not self._stop.wait(0.25):
+            while not self._stop.wait(SERIAL_READ_DELAY):
                 if self.connection is None or not self.connection.is_open:
                     self._setStatus("stopped")
+                    break
+                if not self._readAvailableFrames():
                     break
                 self._setStatus("connected")
 
@@ -168,6 +276,21 @@ def envFloat(name: str, default: float) -> float:
     except ValueError:
         print(f"invalid {name}; using {default}")
         return default
+
+
+def envBool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    print(f"invalid {name}; using {default}")
+    return default
 
 
 serialConnection = SerialConnectionManager(
@@ -312,6 +435,7 @@ class SensorPollingManager:
 sensorPolling = SensorPollingManager(
     pollInterval=envFloat("CHESSARM_SENSOR_POLL_INTERVAL", 1.0 / 60.0),
 )
+sensorPollingEnabled = envBool("CHESSARM_SENSOR_POLLING_ENABLED", False)
 
 # display library
 from display import ChessarmDisplay
@@ -428,8 +552,10 @@ def resetGameState() -> GameLogger:
 @app.on_event("startup")
 async def startBackgroundWorkers():
     app.state.gameLogger = createGameLoggerWithInitialState()
-    serialConnection.start()
-    sensorPolling.start(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    serialConnection.start(loop)
+    if sensorPollingEnabled:
+        sensorPolling.start(loop)
     app.state.serialStatusTask = asyncio.create_task(broadcastSerialStatusLoop())
 
 
@@ -442,7 +568,8 @@ async def stopBackgroundWorkers():
             await task
         except asyncio.CancelledError:
             pass
-    sensorPolling.close()
+    if sensorPollingEnabled:
+        sensorPolling.close()
     serialConnection.close()
 
 
@@ -476,20 +603,27 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     clients.add(ws)
 
-    # send initial frames
-    await ws.send_json(
-    {
-        "type": "frames",
-        "displayTiles": 
-        {
-            str(i): tile.toBase64()
-            for i, tile in enumerate(chessarmDisplay.displayTiles)
-        }
-    })
-    await ws.send_text(json.dumps(robotStateMessage()))
-    await ws.send_text(json.dumps(boardStateMessage()))
-    await ws.send_text(json.dumps(serialStateMessage()))
-    await ws.send_text(json.dumps(serialCommandsMessage()))
+    try:
+        # send initial frames
+        await ws.send_json({
+            "type": "frames",
+            "displayTiles":
+            {
+                str(i): tile.toBase64()
+                for i, tile in enumerate(chessarmDisplay.displayTiles)
+            }
+        })
+        await ws.send_text(json.dumps(robotStateMessage()))
+        await ws.send_text(json.dumps(boardStateMessage()))
+        await ws.send_text(json.dumps(serialStateMessage()))
+        await ws.send_text(json.dumps(serialCommandsMessage()))
+
+    except WebSocketDisconnect:
+        clients.discard(ws)
+        return
+    except Exception:
+        clients.discard(ws)
+        return
 
     try:
         
@@ -668,6 +802,8 @@ async def ws_endpoint(ws: WebSocket):
 
     except WebSocketDisconnect:
         clients.discard(ws)
+
+
 
 # --- Static frontend (React build) mount LAST ---
 BASE_DIR = Path(__file__).resolve().parent
