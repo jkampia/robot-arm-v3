@@ -3,6 +3,9 @@ build/
 install/
 log/
 
+# chess game logging directory
+logs
+
 # training data (images)
 
 training_data/original_data/*
