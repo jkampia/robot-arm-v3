@@ -5,8 +5,8 @@ function newReqId() {
 }
 
 function formatFieldValue(value) {
-  if (!Number.isFinite(value)) return "0";
-  return String(Math.round(value * 10) / 10);
+  if (!Number.isFinite(value)) return "0.00";
+  return value.toFixed(2);
 }
 
 function formatStepValue(value) {
@@ -185,6 +185,7 @@ export default function App() {
     { label: "J3", value: robotJoint3, steps: rawEncoderSteps[3] },
     { label: "J4", value: robotJoint4, steps: rawEncoderSteps[4] },
   ];
+  const jointDeltaAngles = [-30, -10, -5, 5, 10, 30];
 
   const wsUrl = useMemo(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -330,6 +331,35 @@ export default function App() {
     sendCmd("set_joint_angles", {
       joint_angles: nextValues.map((jointValue) => Number(jointValue || 0)),
     });
+  }
+
+  function jogJointDelta(index, deltaAngle) {
+    const deltaAngles = [0, 0, 0, 0, 0];
+    deltaAngles[index] = deltaAngle;
+
+    sendCmd("jog_joint_deltas", {
+      delta_angles: deltaAngles,
+    });
+  }
+
+  function previewJointAngles() {
+    return [
+      Number(jog0 || 0),
+      Number(jog1 || 0),
+      Number(jog2 || 0),
+      Number(jog3 || 0),
+      Number(jog4 || 0),
+    ];
+  }
+
+  function previewPose() {
+    return [
+      Number(pose0 || 0),
+      Number(pose1 || 0),
+      Number(pose2 || 0),
+      Number(pose3 || 0),
+      Number(pose4 || 0),
+    ];
   }
 
   return (
@@ -545,6 +575,22 @@ export default function App() {
               <span style={statusLabelStyle}>Robot</span>
               <span style={statusValueStyleFor(robotStatus)}>{robotStatus}</span>
             </div>
+
+            <button
+              onClick={() => sendCmd("home")}
+              style={buttonStyle({ minHeight: 61, padding: "0 18px", fontSize: 16, fontWeight: 700 })}
+              disabled={wsStatus !== "connected" || robotStatus !== "ready"}
+            >
+              home
+            </button>
+
+            <button
+              onClick={() => sendCmd("return")}
+              style={buttonStyle({ minHeight: 61, padding: "0 18px", fontSize: 16, fontWeight: 700 })}
+              disabled={wsStatus !== "connected" || robotStatus !== "ready"}
+            >
+              return
+            </button>
           </div>
 
           {commandError && (
@@ -630,23 +676,30 @@ export default function App() {
               />
             </div>
 
-            <button
-              onClick={() =>
-                sendCmd("jog_joints", {
-                  joint_angles: [
-                    Number(jog0 || 0),
-                    Number(jog1 || 0),
-                    Number(jog2 || 0),
-                    Number(jog3 || 0),
-                    Number(jog4 || 0),
-                  ],
-                })
-              }
-              style={buttonStyle({ padding: "10px 12px", marginTop: 8, width: "100%" })}
-              disabled={robotStatus !== "ready"}
-            >
-              Jog
-            </button>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={() =>
+                  sendCmd("preview_joints", {
+                    joint_angles: previewJointAngles(),
+                  })
+                }
+                style={buttonStyle({ padding: "10px 12px", width: "100%" })}
+                disabled={wsStatus !== "connected"}
+              >
+                vis
+              </button>
+              <button
+                onClick={() =>
+                  sendCmd("jog_joints", {
+                    joint_angles: previewJointAngles(),
+                  })
+                }
+                style={buttonStyle({ padding: "10px 12px", width: "100%" })}
+                disabled={robotStatus !== "ready"}
+              >
+                Jog
+              </button>
+            </div>
           </div>
         </div>
 
@@ -689,11 +742,67 @@ export default function App() {
                   }}
                 />
                 <span title="Joint angle degrees" style={{ color: colors.muted, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                  {Number(joint.value || 0)}
+                  {formatFieldValue(Number(joint.value || 0))}
                 </span>
                 <span title="Raw encoder steps" style={{ color: colors.muted, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                   {joint.steps}
                 </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: colors.panel,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            padding: 16,
+            width: 400,
+            order: 4,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <h3 style={{ textAlign: "center", marginTop: 0 }}>Joint delta jog</h3>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {jointControls.map((joint, index) => (
+              <div
+                key={`${joint.label}-delta`}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(7, 44px)",
+                  gap: 8,
+                  alignItems: "center",
+                  minHeight: 35,
+                }}
+              >
+                {jointDeltaAngles.slice(0, 3).map((deltaAngle) => (
+                  <button
+                    key={`${joint.label}-${deltaAngle}`}
+                    type="button"
+                    title={`${joint.label} ${deltaAngle} deg`}
+                    onClick={() => jogJointDelta(index, deltaAngle)}
+                    style={buttonStyle({ minHeight: 34, padding: "0 6px", fontVariantNumeric: "tabular-nums" })}
+                    disabled={robotStatus !== "ready"}
+                  >
+                    {deltaAngle}
+                  </button>
+                ))}
+                <span style={{ textAlign: "center", fontWeight: 700 }}>{joint.label}</span>
+                {jointDeltaAngles.slice(3).map((deltaAngle) => (
+                  <button
+                    key={`${joint.label}-${deltaAngle}`}
+                    type="button"
+                    title={`${joint.label} +${deltaAngle} deg`}
+                    onClick={() => jogJointDelta(index, deltaAngle)}
+                    style={buttonStyle({ minHeight: 34, padding: "0 6px", fontVariantNumeric: "tabular-nums" })}
+                    disabled={robotStatus !== "ready"}
+                  >
+                    {deltaAngle}
+                  </button>
+                ))}
               </div>
             ))}
           </div>
@@ -768,23 +877,30 @@ export default function App() {
               />
             </div>
 
-            <button
-              onClick={() =>
-                sendCmd("jog_pose", {
-                  pose: [
-                    Number(pose0 || 0),
-                    Number(pose1 || 0),
-                    Number(pose2 || 0),
-                    Number(pose3 || 0),
-                    Number(pose4 || 0),
-                  ],
-                })
-              }
-              style={buttonStyle({ padding: "10px 12px", marginTop: 8, width: "100%" })}
-              disabled={robotStatus !== "ready"}
-            >
-              Jog
-            </button>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={() =>
+                  sendCmd("preview_pose", {
+                    pose: previewPose(),
+                  })
+                }
+                style={buttonStyle({ padding: "10px 12px", width: "100%" })}
+                disabled={wsStatus !== "connected"}
+              >
+                vis
+              </button>
+              <button
+                onClick={() =>
+                  sendCmd("jog_pose", {
+                    pose: previewPose(),
+                  })
+                }
+                style={buttonStyle({ padding: "10px 12px", width: "100%" })}
+                disabled={robotStatus !== "ready"}
+              >
+                Jog
+              </button>
+            </div>
           </div>
         </div>
 

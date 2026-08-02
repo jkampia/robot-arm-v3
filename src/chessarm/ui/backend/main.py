@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+import traceback
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Set
 
@@ -27,7 +28,6 @@ SERIAL_UTILS_HEADER = srcDir / "teensy" / "serial_utils.hpp"
 
 SERIAL_READ_RATE = 200
 SERIAL_READ_DELAY = 1/SERIAL_READ_RATE
-AS5600_RESOLUTION = 4096
 
 
 def parseCppEnum(headerPath: Path, enumName: str) -> Dict[str, int]:
@@ -64,6 +64,10 @@ def parseCppEnum(headerPath: Path, enumName: str) -> Dict[str, int]:
 
 
 serialCommands = parseCppEnum(SERIAL_UTILS_HEADER, "serialCommand")
+serialCommandNames = {
+    value: name
+    for name, value in serialCommands.items()
+}
 
 
 def buildTeensyCommand(commandName: str, values) -> list:
@@ -176,8 +180,8 @@ class SerialConnectionManager:
 
     def _handleFrame(self, frame: str):
 
-        parts = frame.split(":")
-        #print(parts)
+        frame = frame.strip()
+        parts = [part.strip() for part in frame.split(":")]
         
         if not parts or not parts[0]:
             return
@@ -187,44 +191,108 @@ class SerialConnectionManager:
         except ValueError:
             return
 
+        values = parts[1:]
         if command == serialCommands.get("ENCODER_ANGLE_UPDATE"):
-            self._handleEncoderAngleUpdate(parts[1:])
+            self._handleEncoderAngleUpdate(values)
+        elif command == serialCommands.get("REQUEST_ENCODER_ANGLE_UPDATE") and values:
+            print(
+                "teensy serial frame warning: "
+                "received REQUEST_ENCODER_ANGLE_UPDATE with payload; "
+                "processing it as ENCODER_ANGLE_UPDATE, "
+                f"raw_frame='<{frame}>'"
+            )
+            self._handleEncoderAngleUpdate(values)
+        elif command == serialCommands.get("CONFIRM_RECEIVE"):
+            self._handleReceiveConfirmation(values, frame)
+        else:
+            print(
+                "teensy serial frame ignored: "
+                f"command={command} ({self._serialCommandName(command)}), "
+                f"raw_frame='<{frame}>'"
+            )
+
+
+    def _serialCommandName(self, command: int) -> str:
+        return serialCommandNames.get(command, f"UNKNOWN_COMMAND_{command}")
+
+
+    def _handleReceiveConfirmation(self, values, frame: str):
+        if not values or not values[0]:
+            print(f"teensy receive confirmation malformed: raw_frame='<{frame}>'")
+            return
+
+        try:
+            confirmedCommand = int(values[0])
+        except ValueError:
+            print(
+                "teensy receive confirmation invalid: "
+                f"confirmed_command={values[0]!r}, raw_frame='<{frame}>'"
+            )
+            return
+
+        extraValues = values[1:]
+        extraText = f", extra_values={extraValues}" if extraValues else ""
+        print(
+            "teensy receive confirmation: "
+            f"confirmed_command={confirmedCommand} "
+            f"({self._serialCommandName(confirmedCommand)}), "
+            f"raw_frame='<{frame}>'"
+            f"{extraText}"
+        )
 
 
     def _handleEncoderAngleUpdate(self, values):
         if len(values) < 5:
+            print(f"teensy angle update ignored: expected at least 5 values, got {len(values)}")
             return
 
         try:
-            anglesDeg = [float(value) for value in values[:5]]
+            jointAnglesRad = [float(value) for value in values[:5]]
             stepCounts = (
                 [int(float(value)) for value in values[5:10]]
                 if len(values) >= 10
-                else [
-                    round((angle % 360.0) * AS5600_RESOLUTION / 360.0) % AS5600_RESOLUTION
-                    for angle in anglesDeg
-                ]
+                else [None, None, None, None, None]
             )
         except ValueError:
+            print(f"teensy angle update ignored: non-numeric payload={values}")
             return
 
-        with robotLock:
-            robot.setRawEncoderStepCounts(stepCounts)
-            jointAnglesDeg = robot.encoderStepsToJointAnglesDeg(stepCounts)
-            currentAnglesDeg = [
-                math.degrees(angle)
-                for angle in robot.jointAngles
-            ]
-            nextAnglesDeg = [
-                current if angle is None else float(angle)
-                for current, angle in zip(currentAnglesDeg, jointAnglesDeg)
-            ]
-            if nextAnglesDeg != currentAnglesDeg:
-                robot.setJointAnglesDeg(nextAnglesDeg)
-            message = robot.stateToDict()
+        try:
+            with robotLock:
+
+                robot.setRawEncoderStepCounts(stepCounts)
+                currentAnglesRad = robot.jointAngles
+                if jointAnglesRad != currentAnglesRad:
+                    robot.setJointAnglesRad(jointAnglesRad)
+                robot.clearJoggedJointAngles()
+
+                message = robot.stateToDict()
+        except Exception:
+            print("teensy angle update failed while building robot state:")
+            traceback.print_exc()
+            return
+
+        jointAnglesDeg = [round(math.degrees(angle), 2) for angle in jointAnglesRad]
+        print(
+            "teensy angle update parsed: "
+            f"joint_angles_deg={jointAnglesDeg}, "
+            f"joint_steps={stepCounts}, "
+            f"clients={len(clients)}"
+        )
 
         if self._loop is not None:
-            asyncio.run_coroutine_threadsafe(broadcast(message), self._loop)
+            future = asyncio.run_coroutine_threadsafe(broadcast(message), self._loop)
+            future.add_done_callback(self._logBroadcastResult)
+        else:
+            print("teensy angle update parsed but no asyncio loop is registered")
+
+
+    def _logBroadcastResult(self, future):
+        try:
+            future.result()
+        except Exception:
+            print("teensy angle update broadcast failed:")
+            traceback.print_exc()
 
     def _connect(self):
         self._setStatus("connecting")
@@ -399,8 +467,13 @@ class SensorPollingManager:
                     currentAnglesDeg = None
 
                     with robotLock:
+
                         robot.setRawEncoderStepCounts(readings.step_counts)
-                        jointAnglesDeg = robot.encoderAnglesToJointAnglesDeg(anglesDeg)
+
+                        #jointAnglesDeg = robot.encoderAnglesToJointAnglesDeg(anglesDeg)
+
+                        jointAnglesDeg = robot.encoderStepsToJointAnglesDeg(readings.step_counts)
+
                         currentAnglesDeg = [
                             math.degrees(angle)
                             for angle in robot.jointAngles
@@ -742,12 +815,84 @@ async def ws_endpoint(ws: WebSocket):
                     jointAnglesDeg = [float(value) for value in args["joint_angles"]]
                     try:
                         with robotLock:
-                            robot.setJointAnglesDeg(jointAnglesDeg)
+                            robot.setJoggedJointAnglesDeg(jointAnglesDeg)
                     except Exception as exc:
                         await ws.send_text(json.dumps(ack(req_id, False, f"Invalid joint angles: {exc}")))
                         continue
 
                     await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "preview_joints":
+
+                    jointAnglesDeg = [float(value) for value in args["joint_angles"]]
+                    try:
+                        with robotLock:
+                            robot.setJoggedJointAnglesDeg(jointAnglesDeg)
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Invalid joint angles: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "preview_pose":
+
+                    pose = [float(value) for value in args["pose"]]
+                    try:
+                        with robotLock:
+                            robot.setJoggedJointAnglesRad(robot.solveIK(pose))
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Invalid pose: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "home":
+
+                    try:
+                        command = buildTeensyCommand("HOME", [])
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to home robot: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "return":
+
+                    try:
+                        command = buildTeensyCommand("RETURN", [])
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to return robot: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
@@ -781,17 +926,67 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
+                elif cmd == "jog_joint_deltas":
+
+                    deltaAnglesDeg = [float(value) for value in args["delta_angles"]]
+                    if len(deltaAnglesDeg) != 5:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Expected 5 delta angles, got {len(deltaAnglesDeg)}")))
+                        continue
+
+                    try:
+                        deltaAnglesRad = [math.radians(angle) for angle in deltaAnglesDeg]
+                        command = buildTeensyCommand(
+                            "DELTA_ANGLES_JOINT_SPACE_ACCEL",
+                            [f"{angle:.6f}" for angle in deltaAnglesRad],
+                        )
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to jog joint deltas: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
                 elif cmd == "jog_pose":
 
                     pose = [float(value) for value in args["pose"]]
                     try:
                         with robotLock:
                             robot.setJoggedJointAnglesRad(robot.solveIK(pose))
+                        command = buildTeensyCommand(
+                            "TGT_POSITION_JOINT_SPACE_ACCEL",
+                            [
+                                f"{pose[0]:.6f}",
+                                f"{pose[1]:.6f}",
+                                f"{pose[2]:.6f}",
+                                f"{math.radians(pose[3]):.6f}",
+                                f"{math.radians(pose[4]):.6f}",
+                            ],
+                        )
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
                     except Exception as exc:
-                        await ws.send_text(json.dumps(ack(req_id, False, f"Invalid pose: {exc}")))
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to jog pose: {exc}")))
                         continue
 
                     await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
                     await ws.send_text(json.dumps(robotStateMessage()))
             
                 else:

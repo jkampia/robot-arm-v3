@@ -24,5 +24,9 @@ enum class serialCommand : int
 
   GRIPPER_SET_ANGLE = 9,
   GRIPPER_CLOSE = 10,
-  GRIPPER_OPEN = 11
+  GRIPPER_OPEN = 11,
+
+  CONFIRM_RECEIVE = 12,
+
+  RETURN = 13
 };

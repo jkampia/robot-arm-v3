@@ -8,9 +8,9 @@ constexpr float GRIPPER_ANG_MAX = 90.0;
 
 constexpr int numJoints = 5;
 
-constexpr float limbLengths[numJoints] = {100,  300,  250,  50,   50};
+constexpr float limbLengths[numJoints] = {142.22, 265.0, 200, 0.0, 38.0};
 
-constexpr float gearReduction[numJoints] = {8.0, 10.0, 20.0, 5.0,  1.0};
+constexpr float gearReduction[numJoints] = {8.0, 10.0, 20.0, 4.0,  1.0};
 constexpr int stepsPerRev[numJoints]     = {3200, 3200, 3200, 3200, 3200};
 
 constexpr int minStepDelay[numJoints]    = {100,  100,  100,  100,  100};

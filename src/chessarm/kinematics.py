@@ -171,13 +171,10 @@ class ARM_5DOF:
 
         # difference between what the encoders read vs what they SHOULD read
         # in any of the arm's positions
-        # these two offsets are added together then subtracted from incoming encoder readings
 
         self.encoderReverseRange = [1, 0, 0, 0, 0]
 
-        #self.encoderAngleDefaultOffsetDeg = [180.0, 180.0, 180.0, 180.0, 180.0]
-
-        self.encoderAngleCalibrationOffsetDeg = [183.0, 88.522, 288.5, 87.1, 0.0]
+        self.encoderAngleCalibrationOffsetDeg = [183.0, 88.522, 296.5, 87.1, 0.0]
 
         self.rawEncoderStepCounts = [None, None, None, None, None]
 
@@ -262,6 +259,10 @@ class ARM_5DOF:
 
     def setJoggedJointAnglesDeg(self, jointAnglesDeg):
         self.setJoggedJointAnglesRad([m.radians(float(angle)) for angle in jointAnglesDeg])
+
+
+    def clearJoggedJointAngles(self):
+        self.joggedJointAngles = None
 
 
     def setPoseMmDeg(self, targetPose):

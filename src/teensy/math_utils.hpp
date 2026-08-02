@@ -60,3 +60,22 @@ inline bool normalizeVector(float* vector)
 }
 
 
+
+inline void zeroArray(int* array, const int len)
+{
+  for (int i = 0; i < len; i++)
+  {
+    array[i] = 0;
+  }
+}
+
+inline void zeroArray(float* array, const int len)
+{
+  for (int i = 0; i < len; i++)
+  {
+    array[i] = 0;
+  }
+}
+
+
+
