@@ -591,6 +591,22 @@ export default function App() {
             >
               return
             </button>
+
+            <button
+              onClick={() => sendCmd("gripper_open")}
+              style={buttonStyle({ minHeight: 61, padding: "0 18px", fontSize: 16, fontWeight: 700 })}
+              disabled={wsStatus !== "connected" || robotStatus !== "ready"}
+            >
+              gripper open
+            </button>
+
+            <button
+              onClick={() => sendCmd("gripper_close")}
+              style={buttonStyle({ minHeight: 61, padding: "0 18px", fontSize: 16, fontWeight: 700 })}
+              disabled={wsStatus !== "connected" || robotStatus !== "ready"}
+            >
+              gripper close
+            </button>
           </div>
 
           {commandError && (

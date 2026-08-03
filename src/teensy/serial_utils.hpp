@@ -28,5 +28,7 @@ enum class serialCommand : int
 
   CONFIRM_RECEIVE = 12,
 
-  RETURN = 13
+  RETURN = 13,
+
+  OVERRIDE_CALIBRATION_SAFETY = 14
 };

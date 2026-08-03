@@ -75,13 +75,20 @@ bool newCommand = false;
 
 
 bool led_state = LOW;  
-const float led_period_ms = 1000; 
-const float led_on_time_ms = 200; 
+float led_period_ms = 1000; 
+float led_on_time_ms = 200; 
 uint32_t last_led_cycle_time_ms = 0; // ms, arduino mills() returns uint32_t
+
+void setBuiltinLEDRate(const float rate_hz, const float duty_cycle = 0.2)
+{
+  led_period_ms = 1000 / rate_hz;
+  led_on_time_ms = led_period_ms * duty_cycle;
+}
+
 /*
   pulse built in LED 
 */
-void asyncBlinkLED()
+void asyncBlinkBuiltinLED()
 { 
   uint32_t elapsed = millis() - last_led_cycle_time_ms;
   
@@ -198,6 +205,8 @@ void precalculateJointInfo()
     jointInfo[i].delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
   }
 }
+
+
 
 
 
@@ -894,8 +903,11 @@ void parseCommand(const bool debug = false)
   serialCommand commandSignature = static_cast<serialCommand>(command.toInt());
   //Serial.println(serialBuffer[0].toInt());
 
-  // only allow the HOME command through if calibration is incomplete
-  if (!checkInitialCalibrationComplete() && commandSignature != serialCommand::HOME)
+
+  // only allow the HOME & OVERRIDE command through if calibration is incomplete
+  if (!checkInitialCalibrationComplete() 
+        && commandSignature != serialCommand::HOME
+        && commandSignature != serialCommand::OVERRIDE_CALIBRATION_SAFETY)
   {
     newCommand = false;
     return;
@@ -920,6 +932,15 @@ void parseCommand(const bool debug = false)
 
       returnToHome(); 
       break;
+    }
+
+    case serialCommand::OVERRIDE_CALIBRATION_SAFETY:
+    {
+      Serial.println("Received OVERRIDE_CALIBRATION_SAFETY command");
+      sendReceiveConfirmation(commandSignature);
+
+      initial_calibration_complete = true;
+      break; 
     }
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE:
@@ -1025,6 +1046,28 @@ void parseCommand(const bool debug = false)
 
       float angle = serialBuffer[1].toFloat();
       setGripperAngle(angle);
+
+      break;
+    }
+
+    case serialCommand::GRIPPER_CLOSE:
+    {
+      Serial.println("Received GRIPPER_CLOSE command");
+      sendReceiveConfirmation(commandSignature);
+
+      float close_angle = GRIPPER_ANG_MIN; 
+      setGripperAngle(close_angle);
+
+      break;
+    }
+
+    case serialCommand::GRIPPER_OPEN:
+    {
+      Serial.println("Received GRIPPER_OPEN command");
+      sendReceiveConfirmation(commandSignature);
+
+      float open_angle = GRIPPER_ANG_MAX; 
+      setGripperAngle(open_angle);
 
       break;
     }
@@ -1166,7 +1209,12 @@ void calibrateWithEncoderFeedback()
     jogJoints(desiredAngles, implementAcceleration);
   }
 
-  initial_calibration_complete = true; 
+  initial_calibration_complete = true;
+
+  // slow down LED blink rate to indicate that calibration values have been applied
+  // and it is now safe to move the arm 
+  const float slow_led_rate = 1; 
+  setBuiltinLEDRate(slow_led_rate);
 
   Serial.println("Done homing");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
@@ -1233,8 +1281,13 @@ void setup()
   pinMode(ena4, OUTPUT);
 
   gripper.attach(GRIPPER_PWM_PIN, GRIPPER_PWM_MIN, GRIPPER_PWM_MAX);
+  setGripperAngle(GRIPPER_ANG_MIN);
 
   pinMode(LED_BUILTIN, OUTPUT);
+
+  // set led rate to a fast blink to indicate pre-calibration state
+  const float fast_led_rate = 5; // hz
+  setBuiltinLEDRate(fast_led_rate);
 
 
   // reserve n bytes @ each address of serialBuffer
@@ -1279,7 +1332,7 @@ void setup()
 
 void loop() 
 {
-  asyncBlinkLED(); 
+  asyncBlinkBuiltinLED(); 
 
   if (GLOBAL_MODE == specialMode::GET_ENCODER_HOME_STEPS)
   {

@@ -896,6 +896,50 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
+                elif cmd == "gripper_open":
+
+                    try:
+                        command = buildTeensyCommand("GRIPPER_OPEN", [])
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to open gripper: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
+                elif cmd == "gripper_close":
+
+                    try:
+                        command = buildTeensyCommand("GRIPPER_CLOSE", [])
+                        serialConnection.writeCommand(command)
+                        print(f"Wrote command: {command} to teensy")
+
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to close gripper: {exc}")))
+                        continue
+
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
+                    with robotLock:
+                        robot.setStatus("busy")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+                    with robotLock:
+                        robot.setStatus("ready")
+                    await ws.send_text(json.dumps(robotStateMessage()))
+
+
                 elif cmd == "jog_joints":
 
                     jointAnglesDeg = [float(value) for value in args["joint_angles"]]
