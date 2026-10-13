@@ -16,7 +16,7 @@
 #include <Wire.h>
 #include <AS5600.h>
 
-Servo gripper; 
+Servo gripper;
 AS5600 encoder;
 
 
@@ -29,7 +29,7 @@ enum class specialMode : int
 specialMode GLOBAL_MODE = specialMode::NONE;
 //specialMode GLOBAL_MODE = specialMode::GET_ENCODER_HOME_STEPS;
 
-bool initial_calibration_complete = false; 
+bool initial_calibration_complete = false;
 
 
 /* joint stuff */
@@ -54,7 +54,8 @@ float currentEncoderAngles[numJoints];
 
 uint16_t currentEncoderSteps[numJoints];
 
-int homingFlags[numJoints] = {1, 1, 1, 1, 1};
+int homingFlags[numJoints] = {0, 0, 1, 1, 0};
+bool encoderAvailable[numJoints] = {false, false, false, false, false};
 
 int enaFlags[numJoints] = {0, 0, 0, 0, 0};
 
@@ -74,9 +75,9 @@ bool newCommand = false;
 
 
 
-bool led_state = LOW;  
-float led_period_ms = 1000; 
-float led_on_time_ms = 200; 
+bool led_state = LOW;
+float led_period_ms = 1000;
+float led_on_time_ms = 200;
 uint32_t last_led_cycle_time_ms = 0; // ms, arduino mills() returns uint32_t
 
 void setBuiltinLEDRate(const float rate_hz, const float duty_cycle = 0.2)
@@ -86,12 +87,12 @@ void setBuiltinLEDRate(const float rate_hz, const float duty_cycle = 0.2)
 }
 
 /*
-  pulse built in LED 
+  pulse built in LED
 */
 void asyncBlinkBuiltinLED()
-{ 
+{
   uint32_t elapsed = millis() - last_led_cycle_time_ms;
-  
+
   if (elapsed < led_on_time_ms && !led_state)
   {
     digitalWrite(LED_BUILTIN, HIGH);
@@ -101,7 +102,7 @@ void asyncBlinkBuiltinLED()
   else if (elapsed >= led_on_time_ms && led_state)
   {
     digitalWrite(LED_BUILTIN, LOW);
-    led_state = LOW; 
+    led_state = LOW;
   }
 
   else if (elapsed > led_period_ms && !led_state)
@@ -120,35 +121,35 @@ void fastSerialRead(const bool debug = false)
   uint64_t startTime = micros();
 
   int bufferIndex = 0;
-  int totalBytesRead = 0; 
+  int totalBytesRead = 0;
 
   /* blocking based on length of msg */
-  while (Serial.available() > 0) 
+  while (Serial.available() > 0)
   {
     char inbyte = Serial.read();
-     
-    if (inbyte == '<' && totalBytesRead == 0) 
+
+    if (inbyte == '<' && totalBytesRead == 0)
     {
       /* wipe buffer on receiving valid start character */
       for (int i = 0; i < serialBufferLength; i++)
       {
-        serialBuffer[i] = ""; 
+        serialBuffer[i] = "";
       }
     }
-    else if (inbyte == '>' && totalBytesRead != 0) 
+    else if (inbyte == '>' && totalBytesRead != 0)
     {
       /* only read one <msg> per loop */
-      totalBytesRead++; 
+      totalBytesRead++;
       newCommand = true;
       if (debug)
       {
-        uint64_t stopTime = micros(); 
+        uint64_t stopTime = micros();
         int elapsedTime = stopTime - startTime;
         Serial.println("Read " + String(totalBytesRead) + " bytes in " + String(elapsedTime) + " us");
-      } 
+      }
       break;
     }
-    else if (inbyte == ':') 
+    else if (inbyte == ':')
     {
       bufferIndex++;
       if (bufferIndex > serialBufferLength)
@@ -157,9 +158,9 @@ void fastSerialRead(const bool debug = false)
         break;
       }
     }
-    else 
+    else
     {
-      serialBuffer[bufferIndex] += inbyte;   
+      serialBuffer[bufferIndex] += inbyte;
       if (serialBuffer[bufferIndex].length() > serialBufferNumBytes)
       {
         Serial.println("Message segment exceeded " + String(serialBufferNumBytes) + " bytes");
@@ -167,7 +168,7 @@ void fastSerialRead(const bool debug = false)
       }
     }
 
-    totalBytesRead++; 
+    totalBytesRead++;
   }
 }
 
@@ -184,10 +185,10 @@ void precalculateJointInfo()
     jointInfo[i].minStepDelay = minStepDelay[i];
 
     int actualStepsPerRev = jointInfo[i].stepsPerRev * jointInfo[i].gearReduction;
-    
+
     const float revsPerRad = 1/(2*PI);
 
-    jointInfo[i].stepsPerRad = actualStepsPerRev * revsPerRad; 
+    jointInfo[i].stepsPerRad = actualStepsPerRev * revsPerRad;
     jointInfo[i].radsPerStep = 1 / jointInfo[i].stepsPerRad;
 
     const float revsPerDeg = 1/360.0;
@@ -199,7 +200,7 @@ void precalculateJointInfo()
     jointInfo[i].upperLimitRad = upperLimitRad[i];
 
     /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
-    const float t1 = 500 * 1e-6; 
+    const float t1 = 500 * 1e-6;
     const float angle = 1;
     const float accel = jointAccel[i];
     jointInfo[i].delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
@@ -256,7 +257,7 @@ void parseEnaFlags()
 
 
 
-/* 
+/*
 Supposed to be a wrapper that handles joint-space movements with and without acceleration
 Right now it kind of only does S-curve accel movements
 
@@ -282,7 +283,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   // calculate steps to move to satisfy angle delta
   int stepsToMove[numJoints];
   int jointSigns[numJoints];
-  for (int i = 0; i < numJoints; i++) 
+  for (int i = 0; i < numJoints; i++)
   {
     float diff = desiredJointAngles[i] - currentJointAngles[i];
     stepsToMove[i] = abs(diff) * jointInfo[i].stepsPerRad;
@@ -297,7 +298,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   // do the thing!!
   if (implementAcceleration)
   {
-    goStepsAccel(stepsToMove, jointSigns); 
+    goStepsAccel(stepsToMove, jointSigns);
   }
   else
   {
@@ -311,7 +312,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   printArray("Final joint steps: ",  currentJointSteps,  numJoints);
   Serial.println("Jog completed in " + String(elapsedTimeS) + " s");
 
-  sendRobotAngleUpdate(); 
+  sendRobotAngleUpdate();
 
   // solve forward kinematics to update end effector position
   //solve_FK(currentJointAngles, cur_pose);
@@ -335,7 +336,7 @@ bool checkFinished(const int* stepCount, const int* stepsToMove, bool* jointEnab
 
   //printArray("Joint enable flags: ", jointEnableFlags, numJoints);
 
-  return activeCount == 0; // will only return true if all joints are 0 / false 
+  return activeCount == 0; // will only return true if all joints are 0 / false
 };
 
 
@@ -348,14 +349,14 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
   int stepCount[numJoints];
   unsigned long refTime[numJoints];
   bool jointEnableFlags[numJoints];
-  for (int i = 0; i < numJoints; i++) 
-  { 
-    stepCount[i] = 0; 
+  for (int i = 0; i < numJoints; i++)
+  {
+    stepCount[i] = 0;
     jointEnableFlags[i] = true;
     refTime[i] = micros();
   }
 
-  while (!checkFinished(stepCount, stepsToMove, jointEnableFlags)) 
+  while (!checkFinished(stepCount, stepsToMove, jointEnableFlags))
   {
     // joint 0
     if (stepsToMove[0] != 0 && jointEnableFlags[0])
@@ -366,7 +367,7 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[0];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay) 
+      if (dt > half && dt < delay)
       {
         digitalWriteFast(pul0, HIGH);
         //Serial.println("H");
@@ -375,7 +376,7 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       {
         digitalWriteFast(pul0, LOW);
         //Serial.println("L");
-        stepCount[0]++; 
+        stepCount[0]++;
         refTime[0] = now;
       }
     }
@@ -389,14 +390,14 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[1];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay) 
+      if (dt > half && dt < delay)
       {
         digitalWriteFast(pul1, HIGH);
       }
       else if (dt >= delay)
       {
         digitalWriteFast(pul1, LOW);
-        stepCount[1]++; 
+        stepCount[1]++;
         refTime[1] = now;
       }
     }
@@ -410,14 +411,14 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[2];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay) 
+      if (dt > half && dt < delay)
       {
         digitalWriteFast(pul2, HIGH);
       }
       else if (dt >= delay)
       {
         digitalWriteFast(pul2, LOW);
-        stepCount[2]++; 
+        stepCount[2]++;
         refTime[2] = now;
       }
     }
@@ -431,14 +432,14 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[3];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay) 
+      if (dt > half && dt < delay)
       {
         digitalWriteFast(pul3, HIGH);
       }
       else if (dt >= delay)
       {
         digitalWriteFast(pul3, LOW);
-        stepCount[3]++; 
+        stepCount[3]++;
         refTime[3] = now;
       }
     }
@@ -452,14 +453,14 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[4];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay) 
+      if (dt > half && dt < delay)
       {
         digitalWriteFast(pul4, HIGH);
       }
       else if (dt >= delay)
       {
         digitalWriteFast(pul4, LOW);
-        stepCount[4]++; 
+        stepCount[4]++;
         refTime[4] = now;
       }
     }
@@ -510,33 +511,42 @@ bool checkAgainstJointLimits(const float* commandAngles)
 
 void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int movementTimeUs)
 {
-  if (movementTimeUs <= 0) 
-  { 
+  if (movementTimeUs <= 0)
+  {
     Serial.print("Invalid movement time provided: " + String(movementTimeUs));
-    return; 
+    return;
   }
 
-  int tempArray[numJoints];
+  // Validate before starting any joint, and leave inactive delay vectors empty.
   for (int i = 0; i < numJoints; i++)
   {
-    int delay = movementTimeUs / stepsToMove[i];
-    jointDelays[i].clear();
-    jointDelays[i].front() = delay;
-    tempArray[i] = delay;
+    if (stepsToMove[i] < 0 || (stepsToMove[i] > 0 &&
+        (jointSigns[i] == 0 || movementTimeUs / stepsToMove[i] < 2 ||
+         movementTimeUs / stepsToMove[i] > 65535)))
+    {
+      Serial.println("Invalid step count, direction, or pulse period");
+      return;
+    }
   }
-
-  //printArray("Joint step delays: ", tempArray, numJoints);
+  for (int i = 0; i < numJoints; i++)
+  {
+    jointDelays[i].clear();
+    if (stepsToMove[i] > 0)
+    {
+      jointDelays[i].push_back(movementTimeUs / stepsToMove[i]);
+    }
+  }
 
   const bool implementAcceleration = false;
   doRawSteps(stepsToMove, jointSigns, implementAcceleration);
 }
 
 
-/* 
+/*
 FUNCTION PARAMS
 stepsToMove: array containing # of steps each joint has to move
 */
-void goStepsAccel(const int *stepsToMove, const int* jointSigns) 
+void goStepsAccel(const int *stepsToMove, const int* jointSigns)
 {
   float sumTime[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
   //float jointTimeScalar[numJoints] = {0, 0, 0, 0, 0, 0};
@@ -544,18 +554,18 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
   for (int i = 0; i < numJoints; i++)
   {
     // wipe vector, maintains its space in memory
-    jointDelays[i].clear(); 
+    jointDelays[i].clear();
     // populate jointDelays with new delay values
-    computeStepDelays(jointInfo[i], abs(stepsToMove[i]), jointDelays[i]); 
+    computeStepDelays(jointInfo[i], abs(stepsToMove[i]), jointDelays[i]);
     // add up all delays to calculate total movement time (microseconds)
     for (const auto& val : jointDelays[i]) { sumTime[i] += val; }
-  }  
+  }
 
   // find which joint takes the longest, its time, and its index
-  float maxTime = 0; 
-  for (int i = 0; i < numJoints; i++) 
+  float maxTime = 0;
+  for (int i = 0; i < numJoints; i++)
   {
-    if (sumTime[i] > maxTime) 
+    if (sumTime[i] > maxTime)
     {
       maxTime = sumTime[i];
     }
@@ -563,7 +573,7 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
   }
   //Serial.println("Max time: " + String(maxTime));
 
-  for (int i = 0; i < numJoints; i++) 
+  for (int i = 0; i < numJoints; i++)
   {
     if (sumTime[i] != 0) {
       float jointTimeScalar = maxTime / sumTime[i];
@@ -579,7 +589,7 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
 
 
 /*
-Magic secret sauce function, calculates step delays required for smooth S-curve 
+Magic secret sauce function, calculates step delays required for smooth S-curve
 for a single joint
 
 FUNCTION PARAMS
@@ -587,10 +597,10 @@ motorIndex: the joint index (0-4)
 numSteps: the number of steps the joint has to move
 delayVector: the joint delay vector to be populated
 */
-void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint16_t>& delayVector) 
-{ 
+void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vector<uint16_t>& delayVector)
+{
   /* https://ww1.microchip.com/downloads/en/Appnotes/doc8017.pdf */
-  //const float t1 = 500 * 1e-6; 
+  //const float t1 = 500 * 1e-6;
   //const float angle = 1;
   //const float accel = 0.1;
   //const float delay0 = 1/t1 * sqrt(2 * angle / accel) * 0.67703;
@@ -598,32 +608,32 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
   //const float delay0 = 2000 * sqrt(2*angle / accel) * 0.67703;
 
   float d = jointInfo.delay0;
-  int n = 0; 
+  int n = 0;
   int rampUpStepCount = 0;
   //int totalSteps = 0;
 
   for (int i = 0; i < numSteps; i++) {
     if (rampUpStepCount == 0) {
-      n++; 
+      n++;
       d = d - (2 * d) / (4 * n + 1);
       if (d <= jointInfo.minStepDelay) {
-        d = jointInfo.minStepDelay; 
+        d = jointInfo.minStepDelay;
         rampUpStepCount = i;
-        //Serial.println(rampUpStepCount); 
+        //Serial.println(rampUpStepCount);
       }
       if (i >= numSteps / 2) {
         rampUpStepCount = i;
-        //Serial.println(rampUpStepCount); 
+        //Serial.println(rampUpStepCount);
       }
     }
     else if (i >= numSteps - rampUpStepCount) {
       n--;
       d = (d * (4 * n + 1)) / (4 * n + 1 - 2);
     }
-    
+
     //Serial.println(uint16_t(d));
     delayVector.push_back(uint16_t(d));
-    //Serial.println(delay_array[i]);  
+    //Serial.println(delay_array[i]);
   }
 }
 
@@ -697,7 +707,7 @@ bool solveIK(const float* targetPose, float* targetJointAngles)
 
   // flip elbow angle to match arm orientation
   // AFTER it is used to calculate theta2
-  theta3 *= -1; 
+  theta3 *= -1;
 
   // apply offsets to theta4 as it is provided in world frame
   // NOT last link frame, and FK expects last link frame
@@ -712,7 +722,7 @@ bool solveIK(const float* targetPose, float* targetJointAngles)
   targetJointAngles[3] = theta4;
   targetJointAngles[4] = theta5;
 
-  uint64_t stopTime = micros(); 
+  uint64_t stopTime = micros();
   int timePassedUs = stopTime - startTime;
   Serial.println("Solved IK in " + String(timePassedUs) + " us");
 
@@ -725,7 +735,7 @@ void jogPositionJointSpace(float* desiredPoseXYZPR)
 {
   float desiredAngles[numJoints];
   if (!solveIK(desiredPoseXYZPR, desiredAngles)) return;
-  
+
   const bool implementAcceleration = true;
   jogJoints(desiredAngles, implementAcceleration);
 }
@@ -736,18 +746,18 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
 {
   float deltaVector[3]; // contains only x, y, z
   arraySubtract(desiredPoseXYZPR, currentPose, deltaVector, 3);
-  
-  
+
+
 }
 
 
-float mapGripperAngle(float angle) 
+float mapGripperAngle(float angle)
 {
   return GRIPPER_PWM_MIN + (angle / GRIPPER_ANG_MAX) * (GRIPPER_PWM_MAX - GRIPPER_PWM_MIN);
 }
 
 
-float clampGripperAngle(float angle) 
+float clampGripperAngle(float angle)
 {
   if (angle < GRIPPER_ANG_MIN) return GRIPPER_ANG_MIN;
   if (angle > GRIPPER_ANG_MAX) return GRIPPER_ANG_MAX;
@@ -794,6 +804,7 @@ bool initializeEncoders(const bool debug = false)
   {
     bool encoderOk = selectEncoderMuxChannel(encoderMuxChannels[i]) && encoder.begin();
 
+    encoderAvailable[i] = encoderOk;
     if (!encoderOk)
     {
       allEncodersOk = false;
@@ -802,7 +813,7 @@ bool initializeEncoders(const bool debug = false)
         Serial.println("WARNING: AS5600 not detected on TCA9548A channel " + String(encoderMuxChannels[i]));
       }
 
-      homingFlags[i] = 0;
+      // Encoder availability must not disable limit-switch homing; see encoderAvailable.
     }
   }
 
@@ -835,7 +846,7 @@ bool readEncoderAngles(const bool debug = false)
         float temp = float(encoderSteps);
         if (encoderReverseRange[i])
         {
-          temp = 4096.0 - encoderSteps; 
+          temp = 4096.0 - encoderSteps;
         }
 
         currentEncoderSteps[i] = temp;
@@ -905,7 +916,7 @@ void parseCommand(const bool debug = false)
 
 
   // only allow the HOME & OVERRIDE command through if calibration is incomplete
-  if (!checkInitialCalibrationComplete() 
+  if (!checkInitialCalibrationComplete()
         && commandSignature != serialCommand::HOME
         && commandSignature != serialCommand::OVERRIDE_CALIBRATION_SAFETY)
   {
@@ -913,15 +924,15 @@ void parseCommand(const bool debug = false)
     return;
   }
 
-  
+
   switch(commandSignature)
   {
     case serialCommand::HOME:
     {
-      Serial.println("Received HOME command"); 
+      Serial.println("Received HOME command");
       sendReceiveConfirmation(commandSignature);
 
-      calibrateWithEncoderFeedback(); 
+      homeWithLimitSwitchFeedback();
       break;
     }
 
@@ -930,7 +941,7 @@ void parseCommand(const bool debug = false)
       Serial.println("Received RETURN command");
       sendReceiveConfirmation(commandSignature);
 
-      returnToHome(); 
+      returnToHome();
       break;
     }
 
@@ -940,20 +951,20 @@ void parseCommand(const bool debug = false)
       sendReceiveConfirmation(commandSignature);
 
       initial_calibration_complete = true;
-      break; 
+      break;
     }
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE:
     {
       Serial.println("Received TGT_ANGLES_JOINT_SPACE command");
       sendReceiveConfirmation(commandSignature);
-      
+
       float desiredAngles[numJoints];
       memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
 
       for (int i = 0; i < numJoints; i++)
       {
-        if (serialBuffer[i+1].length() > 0) 
+        if (serialBuffer[i+1].length() > 0)
         {
           desiredAngles[i] = serialBuffer[i+1].toFloat();
         }
@@ -961,7 +972,7 @@ void parseCommand(const bool debug = false)
 
       const bool implementAcceleration = false;
       const int movementTimeUs = 3000000;
-      jogJoints(desiredAngles, implementAcceleration, movementTimeUs); 
+      jogJoints(desiredAngles, implementAcceleration, movementTimeUs);
       break;
     }
 
@@ -976,14 +987,14 @@ void parseCommand(const bool debug = false)
 
       for (int i = 0; i < numJoints; i++)
       {
-        if (serialBuffer[i+1].length() > 0) 
+        if (serialBuffer[i+1].length() > 0)
         {
           desiredAngles[i] = serialBuffer[i+1].toFloat();
         }
       }
 
       const bool implementAcceleration = true;
-      jogJoints(desiredAngles, implementAcceleration);      
+      jogJoints(desiredAngles, implementAcceleration);
       break;
     }
 
@@ -997,7 +1008,7 @@ void parseCommand(const bool debug = false)
 
       for (int i = 0; i < numJoints; i++)
       {
-        if (serialBuffer[i+1].length() > 0) 
+        if (serialBuffer[i+1].length() > 0)
         {
           desiredPoseXYZPR[i] = serialBuffer[i+1].toFloat();
         }
@@ -1010,7 +1021,7 @@ void parseCommand(const bool debug = false)
       }
 
       if (!commandValid) break;
-      
+
       jogPositionJointSpace(desiredPoseXYZPR);
 
       break;
@@ -1021,20 +1032,20 @@ void parseCommand(const bool debug = false)
       Serial.println("Received DELTA_ANGLES_JOINT_SPACE_ACCEL command");
       sendReceiveConfirmation(commandSignature);
 
-      // copy current joint angles 
+      // copy current joint angles
       float desiredAngles[numJoints];
       memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
 
       for (int i = 0; i < numJoints; i++)
       {
-        if (serialBuffer[i+1].length() > 0) 
+        if (serialBuffer[i+1].length() > 0)
         {
           desiredAngles[i] += serialBuffer[i+1].toFloat();
         }
       }
 
       const bool implementAcceleration = true;
-      jogJoints(desiredAngles, implementAcceleration);      
+      jogJoints(desiredAngles, implementAcceleration);
 
       break;
     }
@@ -1055,7 +1066,7 @@ void parseCommand(const bool debug = false)
       Serial.println("Received GRIPPER_CLOSE command");
       sendReceiveConfirmation(commandSignature);
 
-      float close_angle = GRIPPER_ANG_MIN; 
+      float close_angle = GRIPPER_ANG_MIN;
       setGripperAngle(close_angle);
 
       break;
@@ -1066,7 +1077,7 @@ void parseCommand(const bool debug = false)
       Serial.println("Received GRIPPER_OPEN command");
       sendReceiveConfirmation(commandSignature);
 
-      float open_angle = GRIPPER_ANG_MAX; 
+      float open_angle = GRIPPER_ANG_MAX;
       setGripperAngle(open_angle);
 
       break;
@@ -1078,7 +1089,7 @@ void parseCommand(const bool debug = false)
       break;
     }
   }
-  
+
   newCommand = false;
   Serial.print("\n");
 }
@@ -1099,7 +1110,7 @@ void sendReceiveConfirmation(serialCommand confirmCommand)
 
 
 void printFreeMemory()
-{ 
+{
   // for Teensy 3.0
   uint32_t stackTop;
   uint32_t heapTop;
@@ -1133,27 +1144,27 @@ void disableAllJoints()
 /*
   Home each joint
 */
-void calibrateWithEncoderFeedback()
+void homeWithEncoderFeedback()
 {
   int j_idx = 0;
-  float tolerance = 1; 
+  float tolerance = 1;
   int stepsToMove[numJoints] = {0, 0, 0, 0, 0};
   int jointSigns[numJoints] = {0, 0, 0, 0, 0};
-  
+
   int movementTimeUs = 400;
 
-  int error; 
-  int prev_error; 
+  int error;
+  int prev_error;
 
   for (int i = 0; i < numJoints; i++)
   {
-    if (!homingFlags[i])
+    if (!homingFlags[i] || !encoderAvailable[i])
     {
       Serial.println("Skipping joint " + String(i));
       continue;
-    } // skip disabled joints 
+    } // skip disabled joints
 
-    j_idx = i; 
+    j_idx = i;
 
     readEncoderAngles();
     error = encoderAngleHomeStepTargets[j_idx] - currentEncoderSteps[j_idx];
@@ -1161,16 +1172,16 @@ void calibrateWithEncoderFeedback()
     stepsToMove[j_idx] = 1;
     jointSigns[j_idx] = sign(error);
 
-    movementTimeUs = 400; 
+    movementTimeUs = 400;
 
     Serial.println("Initial Error: " + String(error));
 
     while (abs(error) > tolerance)
     {
-      prev_error = error; 
+      prev_error = error;
 
       //float error_norm = abs(error) / 2*PI;
-      //movementTimeUs = 400 - 300 * error_norm; 
+      //movementTimeUs = 400 - 300 * error_norm;
 
       goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
 
@@ -1190,20 +1201,21 @@ void calibrateWithEncoderFeedback()
 
   for (int i = 0; i < numJoints; i++)
   {
+    if (!homingFlags[i] || !encoderAvailable[i]) continue;
     currentJointAngles[i] = homeJointAngles[i];
     currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
   }
 
-  // rotate j2 -90 degrees 
+  // rotate j2 -90 degrees
   // only do it if the encoder was detected, to avoid undefined behavior
-  if (homingFlags[2])
+  if (homingFlags[2] && encoderAvailable[2])
   {
     const float j2_homing_offset = -PI/2;
 
     float desiredAngles[numJoints];
     memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
 
-    desiredAngles[2] += j2_homing_offset; 
+    desiredAngles[2] += j2_homing_offset;
 
     const bool implementAcceleration = true;
     jogJoints(desiredAngles, implementAcceleration);
@@ -1212,8 +1224,8 @@ void calibrateWithEncoderFeedback()
   initial_calibration_complete = true;
 
   // slow down LED blink rate to indicate that calibration values have been applied
-  // and it is now safe to move the arm 
-  const float slow_led_rate = 1; 
+  // and it is now safe to move the arm
+  const float slow_led_rate = 1;
   setBuiltinLEDRate(slow_led_rate);
 
   Serial.println("Done homing");
@@ -1222,6 +1234,163 @@ void calibrateWithEncoderFeedback()
 }
 
 
+
+/*
+  Limit switches all bridge through Normally Closed (NC), so if one switch is pressed
+  it breaks the entire link
+  Normally, GND -- GPIO (input pullup), so reading GPIO pulls LOW
+  if switch pressed, GND -/- GPIO, so reading GPIO pulls HIGH
+*/
+
+bool readLimitSwitchState()
+{
+  // if reads high, a switch has been pressed
+  return digitalReadFast(LIMIT_SWITCH_PIN);
+}
+
+constexpr uint32_t limitSwitchSampleWindowUs = 10000;
+constexpr uint32_t limitSwitchMinMatchPercent = 95;
+
+/*
+  Limit switches seem to be prone to bouncing when the arm moves, so we need to filter out 
+  erroneous HIGH (open) readings. 
+  Function returns true if the percentage of readings over the sample window meet a minimum threshold
+*/
+bool waitForStableLimitSwitchState(const bool expectedState, const bool reportInvalid = true)
+{
+  const uint32_t startUs = micros();
+  uint32_t totalSamples = 0;
+  uint32_t matchingSamples = 0;
+
+  do
+  {
+    if (readLimitSwitchState() == expectedState) matchingSamples++;
+    totalSamples++;
+  }
+  while (uint32_t(micros() - startUs) < limitSwitchSampleWindowUs);
+
+  const bool valid = uint64_t(matchingSamples) * 100 >= uint64_t(totalSamples) * limitSwitchMinMatchPercent;
+
+  asyncBlinkBuiltinLED();
+
+  if (!valid && reportInvalid)
+  {
+    // Print after sampling so serial output does not affect the window.
+    Serial.print("Limit input: matching samples=");
+    Serial.print(matchingSamples);
+    Serial.print("/");
+    Serial.print(totalSamples);
+    Serial.print(", match percent=");
+    Serial.print(100.0f * matchingSamples / totalSamples);
+    Serial.print(", required percent=");
+    Serial.print(limitSwitchMinMatchPercent);
+    Serial.print(", expected=");
+    Serial.println(expectedState ? "HIGH (open)" : "LOW (closed)");
+  }
+  return valid;
+}
+
+
+
+// Tune these for the physical switch positions and motor wiring before use.
+const int stepsToMoveAfterLimitSwitchClick[numJoints] = {8000, 1000, 13500, 5700, 1000};
+const int limitSwitchSeekSigns[numJoints] = {1, 1, 1, 1, 1};
+const uint32_t limitSwitchSeekTimeoutMs = 30000;
+
+
+//Home each joint expecting limit switch feedback
+void homeWithLimitSwitchFeedback()
+{
+  initial_calibration_complete = false;
+
+  setBuiltinLEDRate(5);
+
+  int stepsToMove[numJoints] = {0};
+  int jointSigns[numJoints] = {0};
+
+  bool allJointsHomed = true;
+
+  const int movementTimeUs = 1000;
+
+  for (int i = numJoints-1; i >= 0; i--)
+  {
+    if (!homingFlags[i])
+    {
+      Serial.println("Skipping joint " + String(i));
+      allJointsHomed = false;
+      continue;
+    }
+
+    if (stepsToMoveAfterLimitSwitchClick[i] <= 0 || abs(limitSwitchSeekSigns[i]) != 1)
+    {
+      Serial.println("Homing aborted: invalid joint configuration");
+      return;
+    }
+
+    // set up movement parameters
+    zeroArray(stepsToMove, numJoints);
+    stepsToMove[i] = 1;
+    jointSigns[i] = limitSwitchSeekSigns[i];
+
+    // Bound seeking by the configured joint travel as well as elapsed time.
+    const int maxSeekSteps = int(ceil((jointInfo[i].upperLimitRad - jointInfo[i].lowerLimitRad) * jointInfo[i].stepsPerRad));
+
+    const uint32_t startMs = millis();
+    int seekSteps = 0;
+
+    while (true)
+    {
+      if (/*seekSteps >= maxSeekSteps ||*/ uint32_t(millis() - startMs) >= limitSwitchSeekTimeoutMs)
+      {
+        Serial.println("Homing aborted: seek limit reached for joint " + String(i));
+        return;
+      }
+      if (readLimitSwitchState())
+      {
+        // Pause on raw HIGH. A confirmed hit ends seeking; a confirmed LOW
+        // means it was a glitch, so retry without resetting the seek timeout.
+        if (waitForStableLimitSwitchState(true, false)) break;
+        if (!waitForStableLimitSwitchState(false))
+        {
+          Serial.println("Homing aborted: ambiguous limit input for joint " + String(i));
+          return;
+        }
+        continue;
+      }
+      goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
+      seekSteps++;
+    }
+
+    // Reverse away from the switch to the calibrated home offset.
+    stepsToMove[i] = stepsToMoveAfterLimitSwitchClick[i];
+    jointSigns[i] = -limitSwitchSeekSigns[i];
+    goStepsAccel(stepsToMove, jointSigns);
+
+    if (!waitForStableLimitSwitchState(false))
+    {
+      Serial.println("Homing aborted: limit circuit did not settle closed after backoff");
+      return;
+    }
+
+    currentJointAngles[i] = homeJointAngles[i];
+    currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
+  }
+
+  // Preserve skipped joint positions and keep motion locked after partial homing.
+  if (!allJointsHomed)
+  {
+    Serial.println("Partial homing complete; calibration remains incomplete");
+    return;
+  }
+
+  initial_calibration_complete = true;
+
+  setBuiltinLEDRate(1);
+
+  Serial.println("Done homing");
+  printArray("Current joint angles: ", currentJointAngles, numJoints);
+  printArray("Current joint steps: ", currentJointSteps, numJoints);
+}
 
 
 /*
@@ -1233,7 +1402,7 @@ void returnToHome()
   memcpy(desiredAngles, returnJointAngles, numJoints * sizeof(float));
 
   const bool implementAcceleration = true;
-  jogJoints(desiredAngles, implementAcceleration); 
+  jogJoints(desiredAngles, implementAcceleration);
 
   Serial.println("Returned to home position");
 }
@@ -1242,7 +1411,7 @@ void returnToHome()
 
 
 
-void setup() 
+void setup()
 {
   Serial.begin(921600);
 
@@ -1283,6 +1452,7 @@ void setup()
   gripper.attach(GRIPPER_PWM_PIN, GRIPPER_PWM_MIN, GRIPPER_PWM_MAX);
   setGripperAngle(GRIPPER_ANG_MIN);
 
+  pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
 
   // set led rate to a fast blink to indicate pre-calibration state
@@ -1308,21 +1478,21 @@ void setup()
     currentJointAngles[i] = homeJointAngles[i];
     currentPose[i] = homePose[i];
 
-    parseEnaFlags(); 
+    parseEnaFlags();
   }
 
   printFreeMemory();
 
   // read encoder angles & assign joint angles
-  readEncoderAngles();
-  
-  // debug print compensated robot state 
-  Serial.println("");
-  printArray("Compensated encoder angles: ", currentEncoderAngles, numJoints);
-  Serial.println("");
+  // readEncoderAngles();
 
-  printArray("Desired (home) angles: ", homeJointAngles, numJoints);
-  printArray("Current estimated joint angles: ", currentJointAngles, numJoints);
+  // debug print compensated robot state
+  // Serial.println("");
+  // printArray("Compensated encoder angles: ", currentEncoderAngles, numJoints);
+  // Serial.println("");
+
+  // printArray("Desired (home) angles: ", homeJointAngles, numJoints);
+  // printArray("Current estimated joint angles: ", currentJointAngles, numJoints);
 
 
   Serial.print("\n");
@@ -1330,25 +1500,18 @@ void setup()
   Serial.print("\n");
 }
 
-void loop() 
+void loop()
 {
-  asyncBlinkBuiltinLED(); 
+  asyncBlinkBuiltinLED();
 
-  if (GLOBAL_MODE == specialMode::GET_ENCODER_HOME_STEPS)
-  {
-    disableAllJoints(); 
-    readEncoderAngles();
-    printArray("Current encoder steps: ", currentEncoderSteps, numJoints);
-  }
+  const bool debug = false;
 
-  else
-  {
-    const bool debug = false;
+  fastSerialRead(debug); // poll for incoming command
+  parseCommand(debug); // parse command if valid one exists in buffer
 
-    fastSerialRead(debug); // poll for incoming command
-    parseCommand(debug); // parse command if valid one exists in buffer
+  //Serial.println(readLimitSwitchState());
 
-    //readEncoderAngles(debug);
-    //sendRobotAngleUpdate(); 
-  }
+  //readEncoderAngles(debug);
+  //sendRobotAngleUpdate();
+
 }

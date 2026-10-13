@@ -27,5 +27,7 @@ constexpr int ena[numJoints] = {ena0, ena1, ena2, ena3, ena4};
 
 #define GRIPPER_PWM_PIN 30
 
+#define LIMIT_SWITCH_PIN 33
+
 
 
