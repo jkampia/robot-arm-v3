@@ -358,6 +358,9 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
 
   while (!checkFinished(stepCount, stepsToMove, jointEnableFlags))
   {
+    // unfortunately this cannot be made into a for loop due to the pulse pins
+    // needing to be static compile-time objects
+
     // joint 0
     if (stepsToMove[0] != 0 && jointEnableFlags[0])
     {
@@ -469,6 +472,7 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
   // add # of steps moved to current joint step position
   // apply movement to joint angles based on actual steps taken
   // not perceived angular movement
+  // assumes no skipped steps
   for (int i = 0; i < numJoints; i++)
   {
     currentJointSteps[i] += stepCount[i] * jointSigns[i];
@@ -478,7 +482,8 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
 
 
 
-// resets reference point for robot arm -- be very careful when calling this
+// resets reference point for robot arm -- be very careful when calling this, as it will 
+// screw up the robot's current kinematic reference
 void zeroAllJoints()
 {
   for (int i = 0; i < numJoints; i++)
@@ -543,8 +548,8 @@ void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
 
 
 /*
-FUNCTION PARAMS
-stepsToMove: array containing # of steps each joint has to move
+  FUNCTION PARAMS
+  stepsToMove: array containing # of steps each joint has to move
 */
 void goStepsAccel(const int *stepsToMove, const int* jointSigns)
 {
