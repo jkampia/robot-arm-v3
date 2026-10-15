@@ -54,7 +54,7 @@ float currentEncoderAngles[numJoints];
 
 uint16_t currentEncoderSteps[numJoints];
 
-int homingFlags[numJoints] = {0, 0, 1, 1, 0};
+int homingFlags[numJoints] = {1, 1, 1, 1, 0};
 bool encoderAvailable[numJoints] = {false, false, false, false, false};
 
 int enaFlags[numJoints] = {0, 0, 0, 0, 0};
@@ -822,8 +822,6 @@ bool initializeEncoders(const bool debug = false)
     }
   }
 
-  printArray("Got homing flags: ", homingFlags, numJoints);
-
   return allEncodersOk;
 }
 
@@ -1247,10 +1245,17 @@ void homeWithEncoderFeedback()
   if switch pressed, GND -/- GPIO, so reading GPIO pulls HIGH
 */
 
-bool readLimitSwitchState()
+bool readLimitSwitchState(const uint32_t numSamples = 5)
 {
-  // if reads high, a switch has been pressed
-  return digitalReadFast(LIMIT_SWITCH_PIN);
+  const uint32_t sampleCount = numSamples > 0 ? numSamples : 1;
+  uint32_t highSamples = 0;
+  for (uint32_t i = 0; i < sampleCount; i++)
+  {
+    if (digitalReadFast(LIMIT_SWITCH_PIN)) highSamples++;
+  }
+
+  // HIGH means pressed. Resolve an even split as pressed as well.
+  return highSamples >= sampleCount - highSamples;
 }
 
 constexpr uint32_t limitSwitchSampleWindowUs = 10000;
@@ -1298,7 +1303,7 @@ bool waitForStableLimitSwitchState(const bool expectedState, const bool reportIn
 
 
 // Tune these for the physical switch positions and motor wiring before use.
-const int stepsToMoveAfterLimitSwitchClick[numJoints] = {8000, 1000, 13500, 5700, 1000};
+const int stepsToMoveAfterLimitSwitchClick[numJoints] = {10285, 5259, 13920, 5643, 1000};
 const int limitSwitchSeekSigns[numJoints] = {1, 1, 1, 1, 1};
 const uint32_t limitSwitchSeekTimeoutMs = 30000;
 
@@ -1312,6 +1317,7 @@ void homeWithLimitSwitchFeedback()
 
   int stepsToMove[numJoints] = {0};
   int jointSigns[numJoints] = {0};
+  int stepsMoved[numJoints] = {0};
 
   bool allJointsHomed = true;
 
@@ -1322,7 +1328,9 @@ void homeWithLimitSwitchFeedback()
     if (!homingFlags[i])
     {
       Serial.println("Skipping joint " + String(i));
-      allJointsHomed = false;
+
+      if (i != numJoints-1) allJointsHomed = false;
+      
       continue;
     }
 
@@ -1352,7 +1360,7 @@ void homeWithLimitSwitchFeedback()
       }
       if (readLimitSwitchState())
       {
-        // Pause on raw HIGH. A confirmed hit ends seeking; a confirmed LOW
+        // Pause on majority HIGH. A confirmed hit ends seeking; a confirmed LOW
         // means it was a glitch, so retry without resetting the seek timeout.
         if (waitForStableLimitSwitchState(true, false)) break;
         if (!waitForStableLimitSwitchState(false))
@@ -1362,11 +1370,15 @@ void homeWithLimitSwitchFeedback()
         }
         continue;
       }
+      
       goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
       seekSteps++;
+      
+      // update step count
+      stepsMoved[i] += stepsToMove[i];
     }
 
-    // Reverse away from the switch to the calibrated home offset.
+    // reverse away from the switch to the calibrated home offset
     stepsToMove[i] = stepsToMoveAfterLimitSwitchClick[i];
     jointSigns[i] = -limitSwitchSeekSigns[i];
     goStepsAccel(stepsToMove, jointSigns);
@@ -1380,6 +1392,9 @@ void homeWithLimitSwitchFeedback()
     currentJointAngles[i] = homeJointAngles[i];
     currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
   }
+
+  // Report steps taken to reach the limit switch for each joint
+  printArray("Homing steps moved: ", stepsMoved, numJoints);
 
   // Preserve skipped joint positions and keep motion locked after partial homing.
   if (!allJointsHomed)
@@ -1431,6 +1446,8 @@ void setup()
   Wire.begin();
   Wire.setClock(400000);
   initializeEncoders(true);
+
+  printArray("Homing flags: ", homingFlags, numJoints);
 
   // set motor output pins
 
