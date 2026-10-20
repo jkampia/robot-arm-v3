@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
 /* returns the sign of a number: -1 if negative, 1 if positive 0 if 0 */
 inline int sign(int x)
 {
@@ -16,15 +20,17 @@ inline int sign(float x)
 /*
 Scales all values in a uint16_t vector by a scalar value
 */
-inline void scaleVector(std::vector<uint16_t>& delayVector, float scalar) 
+inline bool scaleVector(std::vector<uint16_t>& delayVector, float scalar)
 {
-  uint64_t scaledTotalTime = 0;
-  for (auto& delay : delayVector) 
+  if (!std::isfinite(scalar) || scalar <= 0) return false;
+  for (const auto delay : delayVector)
   {
-    delay *= scalar; 
-    scaledTotalTime += delay;
+    const double scaled = std::ceil(double(delay) * scalar);
+    if (scaled < 2 || scaled > UINT16_MAX) return false;
   }
-  //Serial.println("Scaled time: " + String(scaled_time));
+  for (auto& delay : delayVector)
+    delay = uint16_t(std::ceil(double(delay) * scalar));
+  return true;
 }
 
 

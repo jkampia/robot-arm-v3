@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 FRONTEND_DIR="$PROJECT_ROOT/src/chessarm/ui/frontend"
 
+if [ -x "$PROJECT_ROOT/.tools/node/bin/node" ]; then
+  export PATH="$PROJECT_ROOT/.tools/node/bin:$PATH"
+fi
+
 cd "$FRONTEND_DIR"
 
 if ! command -v npm >/dev/null 2>&1; then

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 constexpr int GRIPPER_PWM_MIN = 1000;
 constexpr int GRIPPER_PWM_MAX = 2000;
 
@@ -8,8 +10,6 @@ constexpr float GRIPPER_ANG_MIN = 0.0;
 constexpr float GRIPPER_ANG_MAX = 60.0;
 
 constexpr int numJoints = 5;
-
-constexpr float limbLengths[numJoints] = {142.22, 265.0, 200, 0.0, 38.0};
 
 constexpr float gearReduction[numJoints] = {8.0, 10.0, 20.0, 4.0,  1.0};
 constexpr int stepsPerRev[numJoints]     = {3200, 3200, 3200, 3200, 3200};

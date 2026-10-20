@@ -156,6 +156,7 @@ class SerialConnectionManager:
         if not data:
             return True
 
+        #print(f"teensy serial RX ({len(data)} bytes): {data!r}", flush=True)
         self._rxBuffer += data.decode("ascii", errors="ignore")
 
         while True:
@@ -175,6 +176,9 @@ class SerialConnectionManager:
 
             frame = self._rxBuffer[1:frameEnd]
             self._rxBuffer = self._rxBuffer[frameEnd + 1:]
+
+            #print(f"Received frame: {frame}", flush=True)
+
             self._handleFrame(frame)
 
 
@@ -192,8 +196,10 @@ class SerialConnectionManager:
             return
 
         values = parts[1:]
+
         if command == serialCommands.get("ENCODER_ANGLE_UPDATE"):
             self._handleEncoderAngleUpdate(values)
+
         elif command == serialCommands.get("REQUEST_ENCODER_ANGLE_UPDATE") and values:
             print(
                 "teensy serial frame warning: "
@@ -202,8 +208,10 @@ class SerialConnectionManager:
                 f"raw_frame='<{frame}>'"
             )
             self._handleEncoderAngleUpdate(values)
+
         elif command == serialCommands.get("CONFIRM_RECEIVE"):
             self._handleReceiveConfirmation(values, frame)
+
         else:
             print(
                 "teensy serial frame ignored: "
@@ -242,6 +250,7 @@ class SerialConnectionManager:
 
 
     def _handleEncoderAngleUpdate(self, values):
+
         if len(values) < 5:
             print(f"teensy angle update ignored: expected at least 5 values, got {len(values)}")
             return

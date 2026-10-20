@@ -29,6 +29,7 @@ training_data/aug_data/empty/*
 !training_data/aug_data/empty/.gitkeep
 
 # Python cache
+.tools/
 venv
 __pycache__/
 *.pyc

@@ -4,12 +4,15 @@
 // stepper motor wiring order: black-green-red-blue
 
 #include "joint_info.hpp"
+#include "kinematics.hpp"
 #include "pin_defs.hpp"
 #include "print_utils.hpp"
 #include "math_utils.hpp"
 #include "serial_utils.hpp"
 
 #include <cmath>
+#include <array>
+#include <climits>
 #include <vector>
 
 #include <Servo.h>
@@ -33,16 +36,16 @@ bool initial_calibration_complete = false;
 
 
 /* joint stuff */
-constexpr float homeJointAngles[numJoints] = {0.0, PI/2, 0.0, PI/2, 0.0};
-constexpr float homePose[numJoints]        = {0.0, 0.0, 0.0, 0.0, 0.0};
-
+constexpr float homeJointAngles[numJoints] = {0.0, PI/2, -PI/2, PI/2, 0.0};
 constexpr float returnJointAngles[numJoints] = {0.0, PI/2, -PI/2, PI/2, 0.0};
 
 int currentJointSteps[numJoints];
 float currentJointAngles[numJoints];
-float currentPose[numJoints];
 
-const int encoderAngleHomeStepTargets[numJoints] = {2082, 2039, 2838, 2010, 0};
+// object containing XYZ of each joint + origin & tooltip
+kinematics::JointCoordinates currentJointPositions {};
+
+const int encoderAngleHomingStepTargets[numJoints] = {2082, 2039, 2838, 2010, 0};
 
 const int encoderReverseRange[numJoints] = {1, 0, 0, 0, 0};
 const float encoderAngleCalibrationOffsetDeg[numJoints] = {183.0, 88.522, 296.5, 87.1, 0.0};
@@ -118,57 +121,42 @@ assigns to global string array serialBuffer
 */
 void fastSerialRead(const bool debug = false)
 {
-  uint64_t startTime = micros();
-
-  int bufferIndex = 0;
-  int totalBytesRead = 0;
-
-  /* blocking based on length of msg */
+  static bool receiving = false;
+  static int bufferIndex = 0;
   while (Serial.available() > 0)
   {
-    char inbyte = Serial.read();
-
-    if (inbyte == '<' && totalBytesRead == 0)
+    const char inbyte = Serial.read();
+    if (inbyte == '<')
     {
-      /* wipe buffer on receiving valid start character */
-      for (int i = 0; i < serialBufferLength; i++)
-      {
-        serialBuffer[i] = "";
-      }
+      for (int i = 0; i < serialBufferLength; i++) serialBuffer[i] = "";
+      bufferIndex = 0;
+      receiving = true;
+      continue;
     }
-    else if (inbyte == '>' && totalBytesRead != 0)
+    if (!receiving) continue;
+    if (inbyte == '>')
     {
-      /* only read one <msg> per loop */
-      totalBytesRead++;
+      receiving = false;
       newCommand = true;
-      if (debug)
-      {
-        uint64_t stopTime = micros();
-        int elapsedTime = stopTime - startTime;
-        Serial.println("Read " + String(totalBytesRead) + " bytes in " + String(elapsedTime) + " us");
-      }
+      if (debug) Serial.println("Received complete command");
       break;
     }
-    else if (inbyte == ':')
+    if (inbyte == ':')
     {
-      bufferIndex++;
-      if (bufferIndex > serialBufferLength)
+      if (++bufferIndex >= serialBufferLength)
       {
-        Serial.println("Message exceeds " + String(serialBufferLength) + " segments");
-        break;
+        receiving = false;
+        Serial.println("Message has too many segments");
       }
+      continue;
     }
-    else
+    if (serialBuffer[bufferIndex].length() >= serialBufferNumBytes)
     {
-      serialBuffer[bufferIndex] += inbyte;
-      if (serialBuffer[bufferIndex].length() > serialBufferNumBytes)
-      {
-        Serial.println("Message segment exceeded " + String(serialBufferNumBytes) + " bytes");
-        break;
-      }
+      receiving = false;
+      Serial.println("Message segment too long");
+      continue;
     }
-
-    totalBytesRead++;
+    serialBuffer[bufferIndex] += inbyte;
   }
 }
 
@@ -258,14 +246,13 @@ void parseEnaFlags()
 
 
 /*
-Supposed to be a wrapper that handles joint-space movements with and without acceleration
-Right now it kind of only does S-curve accel movements
+Execute a joint-space movement, returning false if validation or timing fails.
 
 FUNCTION PARAMS
 desiredJointAngles: array containing each joint's desired angle
 implementAcceleration: whether or not to use acceleration S-curve or static speed, default true
 */
-void jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
+bool jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
 {
   Serial.println("\nNEW JOG:");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
@@ -276,9 +263,19 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   if (!checkAgainstJointLimits(desiredJointAngles))
   {
     Serial.println("Movement invalid");
-    return;
+    return false;
   }
   */
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    const double steps = fabs(double(desiredJointAngles[i]) - currentJointAngles[i]) * jointInfo[i].stepsPerRad;
+    if (!std::isfinite(steps) || steps > INT_MAX)
+    {
+      Serial.println("Invalid joint target");
+      return false;
+    }
+  }
 
   // calculate steps to move to satisfy angle delta
   int stepsToMove[numJoints];
@@ -286,7 +283,7 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   for (int i = 0; i < numJoints; i++)
   {
     float diff = desiredJointAngles[i] - currentJointAngles[i];
-    stepsToMove[i] = abs(diff) * jointInfo[i].stepsPerRad;
+    stepsToMove[i] = fabsf(diff) * jointInfo[i].stepsPerRad;
     jointSigns[i] = sign(diff);
   }
 
@@ -298,11 +295,11 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   // do the thing!!
   if (implementAcceleration)
   {
-    goStepsAccel(stepsToMove, jointSigns);
+    if (!goStepsAccel(stepsToMove, jointSigns)) return false;
   }
   else
   {
-    goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
+    if (!goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs)) return false;
   }
 
   uint32_t stopTimeUs = micros();
@@ -313,9 +310,8 @@ void jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   Serial.println("Jog completed in " + String(elapsedTimeS) + " s");
 
   sendRobotAngleUpdate();
+  return true;
 
-  // solve forward kinematics to update end effector position
-  //solve_FK(currentJointAngles, cur_pose);
 }
 
 
@@ -347,7 +343,8 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
   setJointDirections(jointSigns);
 
   int stepCount[numJoints];
-  unsigned long refTime[numJoints];
+  uint32_t refTime[numJoints];
+  bool pulseHigh[numJoints] = {};
   bool jointEnableFlags[numJoints];
   for (int i = 0; i < numJoints; i++)
   {
@@ -370,14 +367,18 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[0];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay)
+      if (!pulseHigh[0] && dt >= half)
       {
         digitalWriteFast(pul0, HIGH);
+        pulseHigh[0] = true;
+        // Preserve a full HIGH half-period even when this loop runs late.
+        refTime[0] = now - half;
         //Serial.println("H");
       }
-      else if (dt >= delay)
+      else if (pulseHigh[0] && dt >= delay)
       {
         digitalWriteFast(pul0, LOW);
+        pulseHigh[0] = false;
         //Serial.println("L");
         stepCount[0]++;
         refTime[0] = now;
@@ -393,13 +394,17 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[1];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay)
+      if (!pulseHigh[1] && dt >= half)
       {
         digitalWriteFast(pul1, HIGH);
+        pulseHigh[1] = true;
+        // Preserve a full HIGH half-period even when this loop runs late.
+        refTime[1] = now - half;
       }
-      else if (dt >= delay)
+      else if (pulseHigh[1] && dt >= delay)
       {
         digitalWriteFast(pul1, LOW);
+        pulseHigh[1] = false;
         stepCount[1]++;
         refTime[1] = now;
       }
@@ -414,13 +419,17 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[2];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay)
+      if (!pulseHigh[2] && dt >= half)
       {
         digitalWriteFast(pul2, HIGH);
+        pulseHigh[2] = true;
+        // Preserve a full HIGH half-period even when this loop runs late.
+        refTime[2] = now - half;
       }
-      else if (dt >= delay)
+      else if (pulseHigh[2] && dt >= delay)
       {
         digitalWriteFast(pul2, LOW);
+        pulseHigh[2] = false;
         stepCount[2]++;
         refTime[2] = now;
       }
@@ -435,13 +444,17 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[3];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay)
+      if (!pulseHigh[3] && dt >= half)
       {
         digitalWriteFast(pul3, HIGH);
+        pulseHigh[3] = true;
+        // Preserve a full HIGH half-period even when this loop runs late.
+        refTime[3] = now - half;
       }
-      else if (dt >= delay)
+      else if (pulseHigh[3] && dt >= delay)
       {
         digitalWriteFast(pul3, LOW);
+        pulseHigh[3] = false;
         stepCount[3]++;
         refTime[3] = now;
       }
@@ -456,13 +469,17 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
       uint32_t dt = now - refTime[4];
       uint32_t half = delay >> 1;
 
-      if (dt > half && dt < delay)
+      if (!pulseHigh[4] && dt >= half)
       {
         digitalWriteFast(pul4, HIGH);
+        pulseHigh[4] = true;
+        // Preserve a full HIGH half-period even when this loop runs late.
+        refTime[4] = now - half;
       }
-      else if (dt >= delay)
+      else if (pulseHigh[4] && dt >= delay)
       {
         digitalWriteFast(pul4, LOW);
+        pulseHigh[4] = false;
         stepCount[4]++;
         refTime[4] = now;
       }
@@ -478,19 +495,22 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
     currentJointSteps[i] += stepCount[i] * jointSigns[i];
     currentJointAngles[i] = currentJointSteps[i] * jointInfo[i].radsPerStep;
   }
+  currentJointPositions = kinematics::solveFK(currentJointAngles);
 }
 
 
 
-// resets reference point for robot arm -- be very careful when calling this, as it will 
+// resets reference point for robot arm -- be very careful when calling this, as it will
 // screw up the robot's current kinematic reference
 void zeroAllJoints()
 {
   for (int i = 0; i < numJoints; i++)
   {
-    currentJointSteps[i] = 0;
-    currentJointAngles[i] = homeJointAngles[i];
+    currentJointSteps[i] = int(homeJointAngles[i] * jointInfo[i].stepsPerRad);
+    currentJointAngles[i] = currentJointSteps[i] * jointInfo[i].radsPerStep;
   }
+
+  currentJointPositions = kinematics::solveFK(currentJointAngles);
 
   printArray("Zeroed joint steps: ", currentJointSteps, numJoints);
   printArray("Zeroed joint angles: ", currentJointAngles, numJoints);
@@ -514,25 +534,38 @@ bool checkAgainstJointLimits(const float* commandAngles)
 
 
 
-void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int movementTimeUs)
+// checks a lot of stuff and fixes step delays if necessary, then passes to doRawSteps() function
+bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int movementTimeUs)
 {
   if (movementTimeUs <= 0)
   {
     Serial.print("Invalid movement time provided: " + String(movementTimeUs));
-    return;
+    return false;
   }
+
+  // joint can skip steps if delay is < 100 us, and cannot hold value > 65535
+  const int min_step_delay = 100;
+  const int max_step_delay = 65535;
 
   // Validate before starting any joint, and leave inactive delay vectors empty.
   for (int i = 0; i < numJoints; i++)
   {
-    if (stepsToMove[i] < 0 || (stepsToMove[i] > 0 &&
-        (jointSigns[i] == 0 || movementTimeUs / stepsToMove[i] < 2 ||
-         movementTimeUs / stepsToMove[i] > 65535)))
+    const bool stepcount_negative = stepsToMove[i] < 0;
+    const bool stepcount_positive = stepsToMove[i] > 0;
+    const bool no_joint_sign = jointSigns[i] != -1 && jointSigns[i] != 1;
+    const int pulse_period = stepcount_positive ? movementTimeUs / stepsToMove[i] : 0;
+    const bool pulse_period_invalid = stepcount_positive && pulse_period < 2;
+    const bool pulse_period_too_large = stepcount_positive && pulse_period > max_step_delay;
+
+    const bool failure_conditions_if_positive = stepcount_positive && (no_joint_sign || pulse_period_invalid || pulse_period_too_large);
+
+    if (stepcount_negative || failure_conditions_if_positive)
     {
       Serial.println("Invalid step count, direction, or pulse period");
-      return;
+      return false;
     }
   }
+
   for (int i = 0; i < numJoints; i++)
   {
     jointDelays[i].clear();
@@ -542,17 +575,70 @@ void goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
     }
   }
 
+  int shortest_period = max_step_delay; // high initial value for comparisons
+  bool pulse_period_too_short = false;
+
+  for (int i = 0; i < numJoints; i++)
+  {
+    if (!jointDelays[i].empty() && jointDelays[i].front() < min_step_delay)
+    {
+      pulse_period_too_short = true;
+      shortest_period = min(shortest_period, int(jointDelays[i].front()));
+    }
+  }
+
+  if (pulse_period_too_short)
+  {
+    // Apply one common scale factor so all joints keep their relative timing.
+    // Integer ceiling ensures the shortest period reaches at least the minimum.
+
+    const float scale_factor = float(min_step_delay) / shortest_period;
+
+    for (int i = 0; i < numJoints; i++)
+    {
+      // check validity of delays post-scalefactor first
+      for (const auto delay : jointDelays[i])
+      {
+        // round up to avoid dipping below the min delay
+        const uint32_t scaled_delay = uint32_t(ceilf(float(delay) * scale_factor));
+
+        if (scaled_delay > max_step_delay)
+        {
+          Serial.println("Invalid scaling - scaled pulse period exceeds max step delay");
+          return false;
+        }
+      }
+    }
+
+    // then apply it
+    for (int i = 0; i < numJoints; i++)
+    {
+      for (auto& delay : jointDelays[i])
+      {
+        delay = uint16_t(ceilf(float(delay) * scale_factor));
+      }
+    }
+  }
+
+  // once all checks are passed and all delays are scaled, do the movement
   const bool implementAcceleration = false;
   doRawSteps(stepsToMove, jointSigns, implementAcceleration);
+
+  return true;
 }
 
 
-/*
-  FUNCTION PARAMS
-  stepsToMove: array containing # of steps each joint has to move
-*/
-void goStepsAccel(const int *stepsToMove, const int* jointSigns)
+
+bool goStepsAccel(const int *stepsToMove, const int* jointSigns)
 {
+  for (int i = 0; i < numJoints; i++)
+  {
+    if (stepsToMove[i] < 0 || (stepsToMove[i] > 0 && jointSigns[i] != -1 && jointSigns[i] != 1))
+    {
+      Serial.println("Invalid step count or direction");
+      return false;
+    }
+  }
   float sumTime[numJoints] = {0.0, 0.0, 0.0, 0.0, 0.0};
   //float jointTimeScalar[numJoints] = {0, 0, 0, 0, 0, 0};
 
@@ -583,12 +669,17 @@ void goStepsAccel(const int *stepsToMove, const int* jointSigns)
     if (sumTime[i] != 0) {
       float jointTimeScalar = maxTime / sumTime[i];
       //Serial.println(jointTimeScalar);
-      scaleVector(jointDelays[i], jointTimeScalar);
+      if (!scaleVector(jointDelays[i], jointTimeScalar))
+      {
+        Serial.println("Scaled acceleration pulse period exceeds timer capacity");
+        return false;
+      }
     }
   }
 
   const bool implementAcceleration = true;
   doRawSteps(stepsToMove, jointSigns, implementAcceleration);
+  return true;
 }
 
 
@@ -644,102 +735,10 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
 
 
 
-bool checkIKSolution(const float* angles)
-{
-  for (int i = 0; i < numJoints; i++)
-  {
-    if (isnan(angles[i]))
-    {
-      printArray("Bad angle array: ", angles, numJoints);
-      Serial.println("IK solution invalid: nan angle");
-      return false;
-    }
-  }
-
-  return true;
-}
-
-
-/*
-geometric IK solve
-
-FUNCTION PARAMS
-targetPose: array of length [numJoints] containing x,y,z,pitch,roll of end effector
-pitch & roll given in radians
-*/
-bool solveIK(const float* targetPose, float* targetJointAngles)
-{
-  uint64_t startTime = micros();
-
-  // unpack inputs for clarity
-  float x = targetPose[0];
-  float y = targetPose[1];
-  float z = targetPose[2];
-  float theta4 = targetPose[3];
-  float theta5 = targetPose[4];
-
-  float l1 = limbLengths[0];
-  float l2 = limbLengths[1];
-  float l3 = limbLengths[2];
-  float l4 = limbLengths[3];
-  float l5 = limbLengths[4];
-
-  // convert to radians
-  //theta4 = m.radians(theta4)
-  //theta5 = m.radians(theta5)
-
-  // base yaw
-  float theta1 = atan2(y, x);
-
-  // effective wrist offset
-  float wrist_len = l4 + l5;
-  float horz = wrist_len * cos(theta4);
-  float x4 = x - horz * cos(theta1);
-  float y4 = y - horz * sin(theta1);
-  float z4 = z - wrist_len * sin(theta4) - l1;
-
-  // distance from shoulder to wrist
-  float rsquared = x4*x4 + y4*y4 + z4*z4;
-
-  // elbow
-  float cos_phi = (rsquared - l2*l2 - l3*l3) / (2.0 * l2 * l3);
-  float theta3 = acos(cos_phi);
-
-  // shoulder
-  float alpha = asin(z4 / sqrt(rsquared));
-  float beta = atan(l3 * sin(theta3) / (l2 + l3 * cos(theta3)));
-  float theta2 = alpha + beta;
-
-  // flip elbow angle to match arm orientation
-  // AFTER it is used to calculate theta2
-  theta3 *= -1;
-
-  // apply offsets to theta4 as it is provided in world frame
-  // NOT last link frame, and FK expects last link frame
-  float j4_offset = theta2 + theta3;
-  theta4 -= j4_offset - PI/2;
-
-
-  // assign to output array
-  targetJointAngles[0] = theta1;
-  targetJointAngles[1] = theta2;
-  targetJointAngles[2] = theta3;
-  targetJointAngles[3] = theta4;
-  targetJointAngles[4] = theta5;
-
-  uint64_t stopTime = micros();
-  int timePassedUs = stopTime - startTime;
-  Serial.println("Solved IK in " + String(timePassedUs) + " us");
-
-  return checkIKSolution(targetJointAngles);
-}
-
-
-
 void jogPositionJointSpace(float* desiredPoseXYZPR)
 {
   float desiredAngles[numJoints];
-  if (!solveIK(desiredPoseXYZPR, desiredAngles)) return;
+  if (!kinematics::solveIK(desiredPoseXYZPR, desiredAngles)) return;
 
   const bool implementAcceleration = true;
   jogJoints(desiredAngles, implementAcceleration);
@@ -747,11 +746,78 @@ void jogPositionJointSpace(float* desiredPoseXYZPR)
 
 
 
+
+
+const float linepath_resolution_mm = 1.0;
+const float linepath_speed_mmps = 200;
+
 void jogPositionLinePath(float* desiredPoseXYZPR)
 {
-  float deltaVector[3]; // contains only x, y, z
-  arraySubtract(desiredPoseXYZPR, currentPose, deltaVector, 3);
+  if (!desiredPoseXYZPR) return;
+  for (int j = 0; j < numJoints; j++)
+  {
+    if (!std::isfinite(desiredPoseXYZPR[j]))
+    {
+      Serial.println("Invalid line path target");
+      return;
+    }
+  }
 
+  float start[numJoints];
+  float delta[numJoints];
+  for (int axis = 0; axis < 3; axis++) start[axis] = currentJointPositions.back()[axis];
+  start[3] = currentJointAngles[1] + currentJointAngles[2] + currentJointAngles[3] - kinematics::halfPi;
+  start[4] = currentJointAngles[4];
+
+  arraySubtract(desiredPoseXYZPR, start, delta, numJoints);
+  const float distance = sqrtf(delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]);
+  if (distance == 0 && delta[3] == 0 && delta[4] == 0) return;
+
+  // For a pure orientation move, use the tool's angular travel as path length.
+  const float path_length = distance > 0 ? distance : fmaxf(fabsf(delta[3]), fabsf(delta[4])) * (limbLengths[3] + limbLengths[4]);
+
+  const float segments = ceilf(path_length / linepath_resolution_mm);
+  // Bound planning memory on the microcontroller.
+  if (!std::isfinite(segments) || segments > 4096 || segments < 1)
+  {
+    Serial.println("Line path exceeds planning capacity");
+    return;
+  }
+
+  const int count = int(segments);
+
+  // Equal-length segments share one duration; goStepsNoAccel handles joint scaling.
+  const double duration = ceil(1000000.0 * path_length / count / linepath_speed_mmps);
+  if (!std::isfinite(duration) || duration < 1 || duration > INT_MAX) return;
+  const int segment_time_us = int(duration);
+
+  // Validate the complete path before executing its joint-angle waypoints.
+  std::vector<std::array<float, numJoints>> trajectory;
+  trajectory.reserve(count);
+
+  // Preflight every waypoint before issuing any motor pulses
+  for (int i = 0; i < count; i++)
+  {
+    float pose[numJoints];
+    std::array<float, numJoints> angles;
+    const float fraction = float(i + 1) / count;
+    for (int j = 0; j < numJoints; j++)
+    {
+      pose[j] = i == count - 1 ? desiredPoseXYZPR[j] : start[j] + fraction * delta[j];
+    }
+
+    if (!kinematics::solveIK(pose, angles.data())) return;
+    trajectory.push_back(angles);
+  }
+
+  for (int i = 0; i < count; i++)
+  {
+    if (!jogJoints(trajectory[i].data(), false, segment_time_us))
+    {
+      Serial.println("Line path stopped: segment rejected");
+      return;
+    }
+  }
 
 }
 
@@ -1170,7 +1236,7 @@ void homeWithEncoderFeedback()
     j_idx = i;
 
     readEncoderAngles();
-    error = encoderAngleHomeStepTargets[j_idx] - currentEncoderSteps[j_idx];
+    error = encoderAngleHomingStepTargets[j_idx] - currentEncoderSteps[j_idx];
     zeroArray(stepsToMove, numJoints);
     stepsToMove[j_idx] = 1;
     jointSigns[j_idx] = sign(error);
@@ -1189,7 +1255,7 @@ void homeWithEncoderFeedback()
       goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
 
       readEncoderAngles();
-      error = encoderAngleHomeStepTargets[j_idx] - currentEncoderSteps[j_idx];
+      error = encoderAngleHomingStepTargets[j_idx] - currentEncoderSteps[j_idx];
       jointSigns[j_idx] = sign(error);
       Serial.println("Error (steps): " + String(error));
 
@@ -1208,6 +1274,8 @@ void homeWithEncoderFeedback()
     currentJointAngles[i] = homeJointAngles[i];
     currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
   }
+
+  currentJointPositions = kinematics::solveFK(currentJointAngles);
 
   // rotate j2 -90 degrees
   // only do it if the encoder was detected, to avoid undefined behavior
@@ -1262,8 +1330,8 @@ constexpr uint32_t limitSwitchSampleWindowUs = 10000;
 constexpr uint32_t limitSwitchMinMatchPercent = 95;
 
 /*
-  Limit switches seem to be prone to bouncing when the arm moves, so we need to filter out 
-  erroneous HIGH (open) readings. 
+  Limit switches seem to be prone to bouncing when the arm moves, so we need to filter out
+  erroneous HIGH (open) readings.
   Function returns true if the percentage of readings over the sample window meet a minimum threshold
 */
 bool waitForStableLimitSwitchState(const bool expectedState, const bool reportInvalid = true)
@@ -1305,6 +1373,7 @@ bool waitForStableLimitSwitchState(const bool expectedState, const bool reportIn
 // Tune these for the physical switch positions and motor wiring before use.
 const int stepsToMoveAfterLimitSwitchClick[numJoints] = {10285, 5259, 13920, 5643, 1000};
 const int limitSwitchSeekSigns[numJoints] = {1, 1, 1, 1, 1};
+const int homingStepDelay[numJoints] = {2000, 2000, 800, 1000, 1000};
 const uint32_t limitSwitchSeekTimeoutMs = 30000;
 
 
@@ -1321,16 +1390,18 @@ void homeWithLimitSwitchFeedback()
 
   bool allJointsHomed = true;
 
-  const int movementTimeUs = 1000;
+
 
   for (int i = numJoints-1; i >= 0; i--)
   {
+    const int movementTimeUs = homingStepDelay[i];
+
     if (!homingFlags[i])
     {
       Serial.println("Skipping joint " + String(i));
 
       if (i != numJoints-1) allJointsHomed = false;
-      
+
       continue;
     }
 
@@ -1370,10 +1441,10 @@ void homeWithLimitSwitchFeedback()
         }
         continue;
       }
-      
+
       goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
       seekSteps++;
-      
+
       // update step count
       stepsMoved[i] += stepsToMove[i];
     }
@@ -1391,6 +1462,7 @@ void homeWithLimitSwitchFeedback()
 
     currentJointAngles[i] = homeJointAngles[i];
     currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
+    currentJointPositions = kinematics::solveFK(currentJointAngles);
   }
 
   // Report steps taken to reach the limit switch for each joint
@@ -1498,10 +1570,10 @@ void setup()
 
     currentJointSteps[i] = homeJointAngles[i] * jointInfo[i].stepsPerRad;
     currentJointAngles[i] = homeJointAngles[i];
-    currentPose[i] = homePose[i];
 
     parseEnaFlags();
   }
+  currentJointPositions = kinematics::solveFK(currentJointAngles);
 
   printFreeMemory();
 
