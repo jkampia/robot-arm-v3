@@ -3,13 +3,13 @@
 #include <array>
 #include <cmath>
 
-// DH parameters
 #include "joint_info.hpp"
 
 constexpr float limbLengths[numJoints] = {142.22, 265.0, 200, 0.0, 38.0};
 
 namespace kinematics
 {
+
 using Matrix4 = std::array<std::array<float, 4>, 4>;
 using Coordinates = std::array<float, 3>;
 // Base origin, five DH joint positions, and the tool tip, in millimeters.

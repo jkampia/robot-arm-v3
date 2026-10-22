@@ -9,6 +9,7 @@
 #include "print_utils.hpp"
 #include "math_utils.hpp"
 #include "serial_utils.hpp"
+#include "memory.hpp"
 
 #include <cmath>
 #include <array>
@@ -138,7 +139,7 @@ void fastSerialRead(const bool debug = false)
     {
       receiving = false;
       newCommand = true;
-      if (debug) Serial.println("Received complete command");
+      if (debug) Serial.printf("Received complete command\n");
       break;
     }
     if (inbyte == ':')
@@ -146,14 +147,14 @@ void fastSerialRead(const bool debug = false)
       if (++bufferIndex >= serialBufferLength)
       {
         receiving = false;
-        Serial.println("Message has too many segments");
+        Serial.printf("Message has too many segments\n");
       }
       continue;
     }
     if (serialBuffer[bufferIndex].length() >= serialBufferNumBytes)
     {
       receiving = false;
-      Serial.println("Message segment too long");
+      Serial.printf("Message segment too long\n");
       continue;
     }
     serialBuffer[bufferIndex] += inbyte;
@@ -200,11 +201,11 @@ void precalculateJointInfo()
 
 
 
-bool checkInitialCalibrationComplete()
+bool checkCalibrationStatus()
 {
   if (!initial_calibration_complete)
   {
-    Serial.println("Command denied: robot has not been calibrated yet!");
+    Serial.printf("Command denied: robot has not been calibrated yet!\n");
   }
   return initial_calibration_complete;
 }
@@ -254,7 +255,7 @@ implementAcceleration: whether or not to use acceleration S-curve or static spee
 */
 bool jogJoints(const float *desiredJointAngles, bool implementAcceleration = true, const int movementTimeUs = 0)
 {
-  Serial.println("\nNEW JOG:");
+  Serial.printf("\nNEW JOG:\n");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
   printArray("Desired joint angles: ", desiredJointAngles, numJoints);
 
@@ -262,7 +263,7 @@ bool jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
   /*
   if (!checkAgainstJointLimits(desiredJointAngles))
   {
-    Serial.println("Movement invalid");
+    Serial.printf("Movement invalid\n");
     return false;
   }
   */
@@ -272,7 +273,7 @@ bool jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
     const double steps = fabs(double(desiredJointAngles[i]) - currentJointAngles[i]) * jointInfo[i].stepsPerRad;
     if (!std::isfinite(steps) || steps > INT_MAX)
     {
-      Serial.println("Invalid joint target");
+      Serial.printf("Invalid joint target\n");
       return false;
     }
   }
@@ -307,7 +308,7 @@ bool jogJoints(const float *desiredJointAngles, bool implementAcceleration = tru
 
   printArray("Final joint angles: ", currentJointAngles, numJoints);
   printArray("Final joint steps: ",  currentJointSteps,  numJoints);
-  Serial.println("Jog completed in " + String(elapsedTimeS) + " s");
+  Serial.printf("Jog completed in %.2f s\n", elapsedTimeS);
 
   sendRobotAngleUpdate();
   return true;
@@ -373,13 +374,13 @@ void doRawSteps(const int* stepsToMove, const int* jointSigns, const bool implem
         pulseHigh[0] = true;
         // Preserve a full HIGH half-period even when this loop runs late.
         refTime[0] = now - half;
-        //Serial.println("H");
+        //Serial.printf("H\n");
       }
       else if (pulseHigh[0] && dt >= delay)
       {
         digitalWriteFast(pul0, LOW);
         pulseHigh[0] = false;
-        //Serial.println("L");
+        //Serial.printf("L\n");
         stepCount[0]++;
         refTime[0] = now;
       }
@@ -539,7 +540,7 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
 {
   if (movementTimeUs <= 0)
   {
-    Serial.print("Invalid movement time provided: " + String(movementTimeUs));
+    Serial.printf("Invalid movement time provided: %d", movementTimeUs);
     return false;
   }
 
@@ -561,7 +562,7 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
 
     if (stepcount_negative || failure_conditions_if_positive)
     {
-      Serial.println("Invalid step count, direction, or pulse period");
+      Serial.printf("Invalid step count, direction, or pulse period\n");
       return false;
     }
   }
@@ -604,7 +605,7 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
 
         if (scaled_delay > max_step_delay)
         {
-          Serial.println("Invalid scaling - scaled pulse period exceeds max step delay");
+          Serial.printf("Invalid scaling - scaled pulse period exceeds max step delay\n");
           return false;
         }
       }
@@ -635,7 +636,7 @@ bool goStepsAccel(const int *stepsToMove, const int* jointSigns)
   {
     if (stepsToMove[i] < 0 || (stepsToMove[i] > 0 && jointSigns[i] != -1 && jointSigns[i] != 1))
     {
-      Serial.println("Invalid step count or direction");
+      Serial.printf("Invalid step count or direction\n");
       return false;
     }
   }
@@ -660,18 +661,18 @@ bool goStepsAccel(const int *stepsToMove, const int* jointSigns)
     {
       maxTime = sumTime[i];
     }
-    //Serial.println(sumTime[i]);
+    //Serial.printf("%.2f\n", sumTime[i]);
   }
-  //Serial.println("Max time: " + String(maxTime));
+  //Serial.printf("Max time: %.2f\n", maxTime);
 
   for (int i = 0; i < numJoints; i++)
   {
     if (sumTime[i] != 0) {
       float jointTimeScalar = maxTime / sumTime[i];
-      //Serial.println(jointTimeScalar);
+      //Serial.printf("%.2f\n", jointTimeScalar);
       if (!scaleVector(jointDelays[i], jointTimeScalar))
       {
-        Serial.println("Scaled acceleration pulse period exceeds timer capacity");
+        Serial.printf("Scaled acceleration pulse period exceeds timer capacity\n");
         return false;
       }
     }
@@ -715,11 +716,11 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
       if (d <= jointInfo.minStepDelay) {
         d = jointInfo.minStepDelay;
         rampUpStepCount = i;
-        //Serial.println(rampUpStepCount);
+        //Serial.printf("%d\n", rampUpStepCount);
       }
       if (i >= numSteps / 2) {
         rampUpStepCount = i;
-        //Serial.println(rampUpStepCount);
+        //Serial.printf("%d\n", rampUpStepCount);
       }
     }
     else if (i >= numSteps - rampUpStepCount) {
@@ -727,9 +728,9 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
       d = (d * (4 * n + 1)) / (4 * n + 1 - 2);
     }
 
-    //Serial.println(uint16_t(d));
+    //Serial.printf("%u\n", static_cast<unsigned int>(uint16_t(d)));
     delayVector.push_back(uint16_t(d));
-    //Serial.println(delay_array[i]);
+    //Serial.printf("%u\n", static_cast<unsigned int>(delay_array[i]));
   }
 }
 
@@ -758,7 +759,7 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
   {
     if (!std::isfinite(desiredPoseXYZPR[j]))
     {
-      Serial.println("Invalid line path target");
+      Serial.printf("Invalid line path target\n");
       return;
     }
   }
@@ -780,7 +781,7 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
   // Bound planning memory on the microcontroller.
   if (!std::isfinite(segments) || segments > 4096 || segments < 1)
   {
-    Serial.println("Line path exceeds planning capacity");
+    Serial.printf("Line path exceeds planning capacity\n");
     return;
   }
 
@@ -791,7 +792,6 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
   if (!std::isfinite(duration) || duration < 1 || duration > INT_MAX) return;
   const int segment_time_us = int(duration);
 
-  // Validate the complete path before executing its joint-angle waypoints.
   std::vector<std::array<float, numJoints>> trajectory;
   trajectory.reserve(count);
 
@@ -814,7 +814,7 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
   {
     if (!jogJoints(trajectory[i].data(), false, segment_time_us))
     {
-      Serial.println("Line path stopped: segment rejected");
+      Serial.printf("Line path stopped: segment rejected\n");
       return;
     }
   }
@@ -845,11 +845,7 @@ void setGripperAngle(const float angle)
 
   gripper.writeMicroseconds((int)pwm_setpt);
 
-  Serial.print("Wrote gripper angle: ");
-  Serial.print(angle_clamped);
-  Serial.print(" -> pwm setpoint: ");
-  Serial.print(pwm_setpt);
-  Serial.println("us");
+  Serial.printf("Wrote gripper angle: %.2f -> pwm setpoint: %.2fus\n", angle_clamped, pwm_setpt);
 }
 
 
@@ -881,7 +877,7 @@ bool initializeEncoders(const bool debug = false)
       allEncodersOk = false;
       if (debug)
       {
-        Serial.println("WARNING: AS5600 not detected on TCA9548A channel " + String(encoderMuxChannels[i]));
+        Serial.printf("WARNING: AS5600 not detected on TCA9548A channel %u\n", static_cast<unsigned int>(encoderMuxChannels[i]));
       }
 
       // Encoder availability must not disable limit-switch homing; see encoderAvailable.
@@ -930,7 +926,7 @@ bool readEncoderAngles(const bool debug = false)
       /*
       if (debug)
       {
-        Serial.println("Failed to read AS5600 on TCA9548A channel " + String(encoderMuxChannels[i]));
+        Serial.printf("Failed to read AS5600 on TCA9548A channel %u\n", static_cast<unsigned int>(encoderMuxChannels[i]));
       }
       */
     }
@@ -940,7 +936,7 @@ bool readEncoderAngles(const bool debug = false)
   if (debug)
   {
     printArray("Encoder steps: ", currentEncoderSteps, numJoints);
-    Serial.println("Read encoder angles in " + String(elapsedTimeUs) + " us");
+    Serial.printf("Read encoder angles in %lu us\n", static_cast<unsigned long>(elapsedTimeUs));
   }
 
   return allReadsOk;
@@ -949,23 +945,19 @@ bool readEncoderAngles(const bool debug = false)
 
 void sendRobotAngleUpdate()
 {
-  Serial.print("<");
-  Serial.print(int(serialCommand::ENCODER_ANGLE_UPDATE));
+  Serial.printf("<%d", int(serialCommand::ENCODER_ANGLE_UPDATE));
 
   for (int i = 0; i < numJoints; i++)
   {
-    Serial.print(":");
-    Serial.print(currentJointAngles[i], 4);
+    Serial.printf(":%.4f", currentJointAngles[i]);
   }
 
   for (int i = 0; i < numJoints; i++)
   {
-    Serial.print(":");
-    Serial.print(currentJointSteps[i]);
+    Serial.printf(":%d", currentJointSteps[i]);
   }
 
-  Serial.print(">");
-  Serial.print("\n");
+  Serial.printf(">\n");
 }
 
 
@@ -981,11 +973,11 @@ void parseCommand(const bool debug = false)
   String command = serialBuffer[0];
 
   serialCommand commandSignature = static_cast<serialCommand>(command.toInt());
-  //Serial.println(serialBuffer[0].toInt());
+  //Serial.printf("%ld\n", serialBuffer[0].toInt());
 
 
   // only allow the HOME & OVERRIDE command through if calibration is incomplete
-  if (!checkInitialCalibrationComplete()
+  if (!checkCalibrationStatus()
         && commandSignature != serialCommand::HOME
         && commandSignature != serialCommand::OVERRIDE_CALIBRATION_SAFETY)
   {
@@ -998,7 +990,7 @@ void parseCommand(const bool debug = false)
   {
     case serialCommand::HOME:
     {
-      Serial.println("Received HOME command");
+      Serial.printf("Received HOME command\n");
       sendReceiveConfirmation(commandSignature);
 
       homeWithLimitSwitchFeedback();
@@ -1007,7 +999,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::RETURN:
     {
-      Serial.println("Received RETURN command");
+      Serial.printf("Received RETURN command\n");
       sendReceiveConfirmation(commandSignature);
 
       returnToHome();
@@ -1016,7 +1008,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::OVERRIDE_CALIBRATION_SAFETY:
     {
-      Serial.println("Received OVERRIDE_CALIBRATION_SAFETY command");
+      Serial.printf("Received OVERRIDE_CALIBRATION_SAFETY command\n");
       sendReceiveConfirmation(commandSignature);
 
       initial_calibration_complete = true;
@@ -1025,7 +1017,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE:
     {
-      Serial.println("Received TGT_ANGLES_JOINT_SPACE command");
+      Serial.printf("Received TGT_ANGLES_JOINT_SPACE command\n");
       sendReceiveConfirmation(commandSignature);
 
       float desiredAngles[numJoints];
@@ -1047,7 +1039,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL:
     {
-      Serial.println("Received TGT_ANGLES_JOINT_SPACE_ACCEL command");
+      Serial.printf("Received TGT_ANGLES_JOINT_SPACE_ACCEL command\n");
       sendReceiveConfirmation(commandSignature);
 
       float desiredAngles[numJoints];
@@ -1069,7 +1061,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::TGT_POSITION_JOINT_SPACE_ACCEL:
     {
-      Serial.println("Received TGT_POSITION_JOINT_SPACE_ACCEL command");
+      Serial.printf("Received TGT_POSITION_JOINT_SPACE_ACCEL command\n");
       sendReceiveConfirmation(commandSignature);
 
       float desiredPoseXYZPR[numJoints];
@@ -1083,7 +1075,7 @@ void parseCommand(const bool debug = false)
         }
         else
         {
-          Serial.println("Position command incomplete: arg" + String(i) + " missing");
+          Serial.printf("Position command incomplete: arg%d missing\n", i);
           commandValid = false;
           break;
         }
@@ -1098,7 +1090,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::DELTA_ANGLES_JOINT_SPACE_ACCEL:
     {
-      Serial.println("Received DELTA_ANGLES_JOINT_SPACE_ACCEL command");
+      Serial.printf("Received DELTA_ANGLES_JOINT_SPACE_ACCEL command\n");
       sendReceiveConfirmation(commandSignature);
 
       // copy current joint angles
@@ -1121,7 +1113,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::GRIPPER_SET_ANGLE:
     {
-      Serial.println("Received GRIPPER_SET_ANGLE command");
+      Serial.printf("Received GRIPPER_SET_ANGLE command\n");
       sendReceiveConfirmation(commandSignature);
 
       float angle = serialBuffer[1].toFloat();
@@ -1132,7 +1124,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::GRIPPER_CLOSE:
     {
-      Serial.println("Received GRIPPER_CLOSE command");
+      Serial.printf("Received GRIPPER_CLOSE command\n");
       sendReceiveConfirmation(commandSignature);
 
       float close_angle = GRIPPER_ANG_MIN;
@@ -1143,7 +1135,7 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::GRIPPER_OPEN:
     {
-      Serial.println("Received GRIPPER_OPEN command");
+      Serial.printf("Received GRIPPER_OPEN command\n");
       sendReceiveConfirmation(commandSignature);
 
       float open_angle = GRIPPER_ANG_MAX;
@@ -1154,13 +1146,13 @@ void parseCommand(const bool debug = false)
 
     default:
     {
-      Serial.println("Received unknown command signature");
+      Serial.printf("Received unknown command signature\n");
       break;
     }
   }
 
   newCommand = false;
-  Serial.print("\n");
+  Serial.printf("\n");
 }
 
 
@@ -1168,33 +1160,10 @@ void parseCommand(const bool debug = false)
 // send confirmation to frontend that a given command was received
 void sendReceiveConfirmation(serialCommand confirmCommand)
 {
-  Serial.print("<");
-  Serial.print(int(serialCommand::CONFIRM_RECEIVE));
-  Serial.print(":");
-  Serial.print(int(confirmCommand));
-  Serial.print(">");
-  Serial.print("\n");
+  Serial.printf("<%d:%d>\n", int(serialCommand::CONFIRM_RECEIVE), int(confirmCommand));
 }
 
 
-
-void printFreeMemory()
-{
-  // for Teensy 3.0
-  uint32_t stackTop;
-  uint32_t heapTop;
-
-  // current position of the stack.
-  stackTop = (uint32_t) &stackTop;
-
-  // current position of heap.
-  void* hTop = malloc(1);
-  heapTop = (uint32_t) hTop;
-  free(hTop);
-
-  // The difference is (approximately) the free, available ram.
-  Serial.println("Free RAM: " + String(stackTop - heapTop) + String("B"));
-}
 
 
 
@@ -1229,7 +1198,7 @@ void homeWithEncoderFeedback()
   {
     if (!homingFlags[i] || !encoderAvailable[i])
     {
-      Serial.println("Skipping joint " + String(i));
+      Serial.printf("Skipping joint %d\n", i);
       continue;
     } // skip disabled joints
 
@@ -1243,7 +1212,7 @@ void homeWithEncoderFeedback()
 
     movementTimeUs = 400;
 
-    Serial.println("Initial Error: " + String(error));
+    Serial.printf("Initial Error: %d\n", error);
 
     while (abs(error) > tolerance)
     {
@@ -1257,11 +1226,11 @@ void homeWithEncoderFeedback()
       readEncoderAngles();
       error = encoderAngleHomingStepTargets[j_idx] - currentEncoderSteps[j_idx];
       jointSigns[j_idx] = sign(error);
-      Serial.println("Error (steps): " + String(error));
+      Serial.printf("Error (steps): %d\n", error);
 
       if (sign(error) != sign(prev_error))
       {
-        Serial.println("Error crossed over zero!");
+        Serial.printf("Error crossed over zero!\n");
         break;
       }
     }
@@ -1299,7 +1268,7 @@ void homeWithEncoderFeedback()
   const float slow_led_rate = 1;
   setBuiltinLEDRate(slow_led_rate);
 
-  Serial.println("Done homing");
+  Serial.printf("Done homing\n");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
   printArray("Current joint steps: ", currentJointSteps, numJoints);
 }
@@ -1354,16 +1323,13 @@ bool waitForStableLimitSwitchState(const bool expectedState, const bool reportIn
   if (!valid && reportInvalid)
   {
     // Print after sampling so serial output does not affect the window.
-    Serial.print("Limit input: matching samples=");
-    Serial.print(matchingSamples);
-    Serial.print("/");
-    Serial.print(totalSamples);
-    Serial.print(", match percent=");
-    Serial.print(100.0f * matchingSamples / totalSamples);
-    Serial.print(", required percent=");
-    Serial.print(limitSwitchMinMatchPercent);
-    Serial.print(", expected=");
-    Serial.println(expectedState ? "HIGH (open)" : "LOW (closed)");
+    Serial.printf("Limit input: matching samples=%lu/%lu, match percent=%.2f, "
+                  "required percent=%lu, expected=%s\n",
+                  static_cast<unsigned long>(matchingSamples),
+                  static_cast<unsigned long>(totalSamples),
+                  100.0f * matchingSamples / totalSamples,
+                  static_cast<unsigned long>(limitSwitchMinMatchPercent),
+                  expectedState ? "HIGH (open)" : "LOW (closed)");
   }
   return valid;
 }
@@ -1398,7 +1364,7 @@ void homeWithLimitSwitchFeedback()
 
     if (!homingFlags[i])
     {
-      Serial.println("Skipping joint " + String(i));
+      Serial.printf("Skipping joint %d\n", i);
 
       if (i != numJoints-1) allJointsHomed = false;
 
@@ -1407,7 +1373,7 @@ void homeWithLimitSwitchFeedback()
 
     if (stepsToMoveAfterLimitSwitchClick[i] <= 0 || abs(limitSwitchSeekSigns[i]) != 1)
     {
-      Serial.println("Homing aborted: invalid joint configuration");
+      Serial.printf("Homing aborted: invalid joint configuration\n");
       return;
     }
 
@@ -1426,7 +1392,7 @@ void homeWithLimitSwitchFeedback()
     {
       if (/*seekSteps >= maxSeekSteps ||*/ uint32_t(millis() - startMs) >= limitSwitchSeekTimeoutMs)
       {
-        Serial.println("Homing aborted: seek limit reached for joint " + String(i));
+        Serial.printf("Homing aborted: seek limit reached for joint %d\n", i);
         return;
       }
       if (readLimitSwitchState())
@@ -1436,7 +1402,7 @@ void homeWithLimitSwitchFeedback()
         if (waitForStableLimitSwitchState(true, false)) break;
         if (!waitForStableLimitSwitchState(false))
         {
-          Serial.println("Homing aborted: ambiguous limit input for joint " + String(i));
+          Serial.printf("Homing aborted: ambiguous limit input for joint %d\n", i);
           return;
         }
         continue;
@@ -1456,7 +1422,7 @@ void homeWithLimitSwitchFeedback()
 
     if (!waitForStableLimitSwitchState(false))
     {
-      Serial.println("Homing aborted: limit circuit did not settle closed after backoff");
+      Serial.printf("Homing aborted: limit circuit did not settle closed after backoff\n");
       return;
     }
 
@@ -1471,7 +1437,7 @@ void homeWithLimitSwitchFeedback()
   // Preserve skipped joint positions and keep motion locked after partial homing.
   if (!allJointsHomed)
   {
-    Serial.println("Partial homing complete; calibration remains incomplete");
+    Serial.printf("Partial homing complete; calibration remains incomplete\n");
     return;
   }
 
@@ -1479,7 +1445,7 @@ void homeWithLimitSwitchFeedback()
 
   setBuiltinLEDRate(1);
 
-  Serial.println("Done homing");
+  Serial.printf("Done homing\n");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
   printArray("Current joint steps: ", currentJointSteps, numJoints);
 }
@@ -1496,7 +1462,7 @@ void returnToHome()
   const bool implementAcceleration = true;
   jogJoints(desiredAngles, implementAcceleration);
 
-  Serial.println("Returned to home position");
+  Serial.printf("Returned to home position\n");
 }
 
 
@@ -1507,9 +1473,7 @@ void setup()
 {
   Serial.begin(921600);
 
-  Serial.print("\n");
-  Serial.println("[SETUP]");
-  Serial.print("\n");
+  Serial.printf("\n[SETUP]\n\n");
 
   // TCA9548A encoder i2c bus encoder setup
 
@@ -1575,23 +1539,22 @@ void setup()
   }
   currentJointPositions = kinematics::solveFK(currentJointAngles);
 
-  printFreeMemory();
+  // post-vector allocation memory
+  memory::printFreeMemory();
 
   // read encoder angles & assign joint angles
   // readEncoderAngles();
 
   // debug print compensated robot state
-  // Serial.println("");
+  // Serial.printf("\n");
   // printArray("Compensated encoder angles: ", currentEncoderAngles, numJoints);
-  // Serial.println("");
+  // Serial.printf("\n");
 
   // printArray("Desired (home) angles: ", homeJointAngles, numJoints);
   // printArray("Current estimated joint angles: ", currentJointAngles, numJoints);
 
 
-  Serial.print("\n");
-  Serial.println("[END SETUP]");
-  Serial.print("\n");
+  Serial.printf("\n[END SETUP]\n\n");
 }
 
 void loop()
@@ -1603,7 +1566,7 @@ void loop()
   fastSerialRead(debug); // poll for incoming command
   parseCommand(debug); // parse command if valid one exists in buffer
 
-  //Serial.println(readLimitSwitchState());
+  //Serial.printf("%d\n", static_cast<int>(readLimitSwitchState()));
 
   //readEncoderAngles(debug);
   //sendRobotAngleUpdate();
