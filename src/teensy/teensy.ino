@@ -986,40 +986,36 @@ void parseCommand(const bool debug = false)
   }
 
 
+  Serial.printf("Received %s command\n", serialCommandToString(commandSignature).c_str());
+
+  // only send confirmation if the command is supported
+  if (commandSupported(commandSignature))
+  {
+    sendReceiveConfirmation(commandSignature);
+  }
+  
   switch(commandSignature)
   {
     case serialCommand::HOME:
     {
-      Serial.printf("Received HOME command\n");
-      sendReceiveConfirmation(commandSignature);
-
       homeWithLimitSwitchFeedback();
       break;
     }
 
     case serialCommand::RETURN:
     {
-      Serial.printf("Received RETURN command\n");
-      sendReceiveConfirmation(commandSignature);
-
       returnToHome();
       break;
     }
 
     case serialCommand::OVERRIDE_CALIBRATION_SAFETY:
     {
-      Serial.printf("Received OVERRIDE_CALIBRATION_SAFETY command\n");
-      sendReceiveConfirmation(commandSignature);
-
       initial_calibration_complete = true;
       break;
     }
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE:
     {
-      Serial.printf("Received TGT_ANGLES_JOINT_SPACE command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float desiredAngles[numJoints];
       memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
 
@@ -1039,9 +1035,6 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL:
     {
-      Serial.printf("Received TGT_ANGLES_JOINT_SPACE_ACCEL command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float desiredAngles[numJoints];
       // copy over current angles as defaults in case msg is not populated correctly
       memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
@@ -1061,9 +1054,6 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::TGT_POSITION_JOINT_SPACE_ACCEL:
     {
-      Serial.printf("Received TGT_POSITION_JOINT_SPACE_ACCEL command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float desiredPoseXYZPR[numJoints];
       bool commandValid = true;
 
@@ -1090,9 +1080,6 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::DELTA_ANGLES_JOINT_SPACE_ACCEL:
     {
-      Serial.printf("Received DELTA_ANGLES_JOINT_SPACE_ACCEL command\n");
-      sendReceiveConfirmation(commandSignature);
-
       // copy current joint angles
       float desiredAngles[numJoints];
       memcpy(desiredAngles, currentJointAngles, numJoints * sizeof(float));
@@ -1111,11 +1098,34 @@ void parseCommand(const bool debug = false)
       break;
     }
 
+    case serialCommand::TGT_POSITION_LINE_PATH:
+    {
+      float desiredPoseXYZPR[numJoints];
+      bool commandValid = true;
+
+      for (int i = 0; i < numJoints; i++)
+      {
+        if (serialBuffer[i+1].length() > 0)
+        {
+          desiredPoseXYZPR[i] = serialBuffer[i+1].toFloat();
+        }
+        else
+        {
+          Serial.printf("Position command incomplete: arg%d missing\n", i);
+          commandValid = false;
+          break;
+        }
+      }
+
+      if (!commandValid) break;
+
+      jogPositionLinePath(desiredPoseXYZPR);
+
+      break;
+    }
+
     case serialCommand::GRIPPER_SET_ANGLE:
     {
-      Serial.printf("Received GRIPPER_SET_ANGLE command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float angle = serialBuffer[1].toFloat();
       setGripperAngle(angle);
 
@@ -1124,9 +1134,6 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::GRIPPER_CLOSE:
     {
-      Serial.printf("Received GRIPPER_CLOSE command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float close_angle = GRIPPER_ANG_MIN;
       setGripperAngle(close_angle);
 
@@ -1135,9 +1142,6 @@ void parseCommand(const bool debug = false)
 
     case serialCommand::GRIPPER_OPEN:
     {
-      Serial.printf("Received GRIPPER_OPEN command\n");
-      sendReceiveConfirmation(commandSignature);
-
       float open_angle = GRIPPER_ANG_MAX;
       setGripperAngle(open_angle);
 
