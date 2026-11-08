@@ -100,6 +100,8 @@ export default function App() {
   const [pose2, setPose2] = useState("0");
   const [pose3, setPose3] = useState("0");
   const [pose4, setPose4] = useState("0");
+  const [poseLinePath, setPoseLinePath] = useState(false);
+  const [poseAcceleration, setPoseAcceleration] = useState(true);
 
   const [activeTab, setActiveTab] = useState("home");
 
@@ -223,6 +225,11 @@ export default function App() {
         else if (msg.type === "ack")
         {
           setCommandError(msg.ok ? "" : (msg.reason || "Command failed"));
+        }
+
+        else if (msg.type === "move_failed")
+        {
+          setCommandError(`${msg.command || "Move"} failed: ${msg.reason || "Unknown reason"}`);
         }
 
         else if (msg.type === "board_state")
@@ -836,6 +843,34 @@ export default function App() {
           
           <h3 style={{ textAlign: "center", marginTop: 0 }}>Jog pose (mm)</h3>
 
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={poseLinePath}
+              aria-labelledby="pose-line-path-label"
+              onClick={() => setPoseLinePath((enabled) => !enabled)}
+              style={{ width: 36, height: 22, padding: 3, border: `1px solid ${colors.border}`, borderRadius: 11, background: poseLinePath ? colors.accent : colors.panelSoft, cursor: "pointer", flexShrink: 0 }}
+            >
+              <span style={{ display: "block", width: 14, height: 14, borderRadius: "50%", background: poseLinePath ? colors.panel : colors.accent, transform: poseLinePath ? "translateX(14px)" : "translateX(0)", transition: "transform 0.15s" }} />
+            </button>
+            <span id="pose-line-path-label">Straight line path</span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={poseAcceleration}
+              aria-labelledby="pose-acceleration-label"
+              onClick={() => setPoseAcceleration((enabled) => !enabled)}
+              style={{ width: 36, height: 22, padding: 3, border: `1px solid ${colors.border}`, borderRadius: 11, background: poseAcceleration ? colors.accent : colors.panelSoft, cursor: "pointer", flexShrink: 0 }}
+            >
+              <span style={{ display: "block", width: 14, height: 14, borderRadius: "50%", background: poseAcceleration ? colors.panel : colors.accent, transform: poseAcceleration ? "translateX(14px)" : "translateX(0)", transition: "transform 0.15s" }} />
+            </button>
+            <span id="pose-acceleration-label">Acceleration</span>
+          </div>
+
           <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
             
             <div style={{ display: "grid", gridTemplateColumns: "34px 1fr", alignItems: "center", gap: 8 }}>
@@ -909,6 +944,8 @@ export default function App() {
                 onClick={() =>
                   sendCmd("jog_pose", {
                     pose: previewPose(),
+                    line_path: poseLinePath,
+                    acceleration: poseAcceleration,
                   })
                 }
                 style={buttonStyle({ padding: "10px 12px", width: "100%" })}

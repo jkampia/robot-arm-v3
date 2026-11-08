@@ -114,6 +114,9 @@ inline bool solveIK(const float* targetPose, float* targetJointAngles)
   // base yaw
   float theta1 = atan2(y, x);
 
+  // Compensate J4 for J0 rotation to hold the commanded tool yaw.
+  theta5 -= theta1;
+
   // effective wrist offset
   float wrist_len = l4 + l5;
   float horz = wrist_len * cos(theta4);

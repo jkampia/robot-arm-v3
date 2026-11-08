@@ -76,6 +76,16 @@ def buildTeensyCommand(commandName: str, values) -> list:
     return [serialCommands[commandName], *values]
 
 
+def checkPoseJog(pose) -> None:
+    """Reject invalid Cartesian jog targets; XYZ are mm, pitch/roll are degrees."""
+    if len(pose) != 5:
+        raise ValueError(f"Expected 5 pose values, got {len(pose)}")
+    if not all(math.isfinite(value) for value in pose):
+        raise ValueError("Pose values must be finite")
+    if pose[2] < 100:
+        raise ValueError("Pose jog Z must be at least 100 mm")
+
+
 class SerialConnectionManager:
 
     def __init__(self, port: str = "/dev/ttyACM0", baudrate: int = 921600):
@@ -89,6 +99,7 @@ class SerialConnectionManager:
         self._lock = threading.Lock()
         self._loop = None
         self._rxBuffer = ""
+        self._motionAwaitingAngles = False
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None):
         if self._thread and self._thread.is_alive():
@@ -197,20 +208,23 @@ class SerialConnectionManager:
 
         values = parts[1:]
 
-        if command == serialCommands.get("ENCODER_ANGLE_UPDATE"):
-            self._handleEncoderAngleUpdate(values)
+        if command == serialCommands.get("JOINT_ANGLE_UPDATE"):
+            self._handleJointAngleUpdate(values)
 
-        elif command == serialCommands.get("REQUEST_ENCODER_ANGLE_UPDATE") and values:
+        elif command == serialCommands.get("REQUEST_JOINT_ANGLE_UPDATE") and values:
             print(
                 "teensy serial frame warning: "
-                "received REQUEST_ENCODER_ANGLE_UPDATE with payload; "
-                "processing it as ENCODER_ANGLE_UPDATE, "
+                "received REQUEST_JOINT_ANGLE_UPDATE with payload; "
+                "processing it as JOINT_ANGLE_UPDATE, "
                 f"raw_frame='<{frame}>'"
             )
-            self._handleEncoderAngleUpdate(values)
+            self._handleJointAngleUpdate(values)
 
         elif command == serialCommands.get("CONFIRM_RECEIVE"):
             self._handleReceiveConfirmation(values, frame)
+
+        elif command == serialCommands.get("MOVE_FAILED"):
+            self._handleMoveFailed(values)
 
         else:
             print(
@@ -219,6 +233,34 @@ class SerialConnectionManager:
                 f"raw_frame='<{frame}>'"
             )
 
+
+    def _handleMoveFailed(self, values):
+        if len(values) < 2:
+            print(f"teensy MOVE_FAILED ignored: incomplete payload={values}")
+            return
+        try:
+            failedCommand = int(values[0])
+        except ValueError:
+            print(f"teensy MOVE_FAILED ignored: invalid command={values[0]!r}")
+            return
+        reason = ":".join(values[1:])
+        with robotLock:
+            self._motionAwaitingAngles = False
+            robot.clearJoggedJointAngles()
+            robot.setStatus("ready")
+            message = robot.stateToDict()
+        error = {
+            "type": "move_failed",
+            "command": self._serialCommandName(failedCommand),
+            "reason": reason,
+        }
+        print(f"teensy move failed: {error['command']}: {reason}")
+        if self._loop is not None:
+            async def publishFailure():
+                await broadcast(message)
+                await broadcast(error)
+            future = asyncio.run_coroutine_threadsafe(publishFailure(), self._loop)
+            future.add_done_callback(self._logBroadcastResult)
 
     def _serialCommandName(self, command: int) -> str:
         return serialCommandNames.get(command, f"UNKNOWN_COMMAND_{command}")
@@ -238,6 +280,10 @@ class SerialConnectionManager:
             )
             return
 
+        if confirmedCommand in (serialCommands.get("HOME"), serialCommands.get("RETURN")):
+            with robotLock:
+                self._motionAwaitingAngles = True
+
         extraValues = values[1:]
         extraText = f", extra_values={extraValues}" if extraValues else ""
         print(
@@ -249,7 +295,7 @@ class SerialConnectionManager:
         )
 
 
-    def _handleEncoderAngleUpdate(self, values):
+    def _handleJointAngleUpdate(self, values):
 
         if len(values) < 5:
             print(f"teensy angle update ignored: expected at least 5 values, got {len(values)}")
@@ -274,6 +320,9 @@ class SerialConnectionManager:
                 if jointAnglesRad != currentAnglesRad:
                     robot.setJointAnglesRad(jointAnglesRad)
                 robot.clearJoggedJointAngles()
+                if self._motionAwaitingAngles:
+                    self._motionAwaitingAngles = False
+                    robot.setStatus("ready")
 
                 message = robot.stateToDict()
         except Exception:
@@ -861,48 +910,31 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
-                elif cmd == "home":
+                elif cmd in ("home", "return"):
+
+                    # Publish busy before dispatch: a fast serial response must
+                    # never be followed by a stale busy message from this handler.
+                    with robotLock:
+                        previousStatus = robot.status
+                        robot.setStatus("busy")
+                    await broadcast(robotStateMessage())
 
                     try:
-                        command = buildTeensyCommand("HOME", [])
+                        command = buildTeensyCommand(cmd.upper(), [])
                         serialConnection.writeCommand(command)
                         print(f"Wrote command: {command} to teensy")
 
                     except Exception as exc:
-                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to home robot: {exc}")))
+                        with robotLock:
+                            serialConnection._motionAwaitingAngles = False
+                            robot.setStatus(previousStatus)
+                        await broadcast(robotStateMessage())
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to {cmd} robot: {exc}")))
                         continue
 
                     await ws.send_text(json.dumps(ack(req_id, True)))
-
-                    with robotLock:
-                        robot.setStatus("busy")
-                    await ws.send_text(json.dumps(robotStateMessage()))
-
-                    with robotLock:
-                        robot.setStatus("ready")
-                    await ws.send_text(json.dumps(robotStateMessage()))
-
-
-                elif cmd == "return":
-
-                    try:
-                        command = buildTeensyCommand("RETURN", [])
-                        serialConnection.writeCommand(command)
-                        print(f"Wrote command: {command} to teensy")
-
-                    except Exception as exc:
-                        await ws.send_text(json.dumps(ack(req_id, False, f"Failed to return robot: {exc}")))
-                        continue
-
-                    await ws.send_text(json.dumps(ack(req_id, True)))
-
-                    with robotLock:
-                        robot.setStatus("busy")
-                    await ws.send_text(json.dumps(robotStateMessage()))
-
-                    with robotLock:
-                        robot.setStatus("ready")
-                    await ws.send_text(json.dumps(robotStateMessage()))
+                    # The angle update after HOME/RETURN's receive confirmation
+                    # transitions to ready and broadcasts the completed state.
 
 
                 elif cmd == "gripper_open":
@@ -1012,12 +1044,25 @@ async def ws_endpoint(ws: WebSocket):
 
                 elif cmd == "jog_pose":
 
-                    pose = [float(value) for value in args["pose"]]
                     try:
+                        pose = [float(value) for value in args["pose"]]
+                        checkPoseJog(pose)
+                        linePath = args.get("line_path", False)
+                        if not isinstance(linePath, bool):
+                            raise ValueError("line_path must be a boolean")
+                        acceleration = args.get("acceleration", True)
+                        if not isinstance(acceleration, bool):
+                            raise ValueError("acceleration must be a boolean")
+                        if not linePath and not acceleration:
+                            raise ValueError("Joint-space pose jogging without acceleration is not supported yet")
+                        if linePath:
+                            commandName = "TGT_POSITION_LINE_PATH_ACCEL" if acceleration else "TGT_POSITION_LINE_PATH"
+                        else:
+                            commandName = "TGT_POSITION_JOINT_SPACE_ACCEL"
                         with robotLock:
                             robot.setJoggedJointAnglesRad(robot.solveIK(pose))
                         command = buildTeensyCommand(
-                            "TGT_POSITION_JOINT_SPACE_ACCEL",
+                            commandName,
                             [
                                 f"{pose[0]:.6f}",
                                 f"{pose[1]:.6f}",

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kinematics.hpp"
+
 /* print helpers */
 
 inline void printArray(const String& msg, const float* array, int len)
@@ -40,4 +42,12 @@ inline void printArray(const String& msg, const bool * array, int len)
     Serial.printf("%d, ", static_cast<int>(array[i]));
   }
   Serial.printf("%d ]\n", static_cast<int>(array[len-1]));
+}
+
+
+
+inline void printEndEffectorPosition(const kinematics::JointCoordinates& jointPositions)
+{
+  const kinematics::Coordinates& position = jointPositions.back();
+  printArray("End effector position (XYZ, mm): ", position.data(), position.size());
 }

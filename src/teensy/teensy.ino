@@ -27,10 +27,12 @@ AS5600 encoder;
 enum class specialMode : int
 {
   NONE = 0,
-  GET_ENCODER_HOME_STEPS = 1
+  GET_ENCODER_HOME_STEPS = 1,
+  BYPASS_CALIBRATION_REQ = 2,
 };
 
-specialMode GLOBAL_MODE = specialMode::NONE;
+//specialMode GLOBAL_MODE = specialMode::NONE;
+specialMode GLOBAL_MODE = specialMode::BYPASS_CALIBRATION_REQ;
 //specialMode GLOBAL_MODE = specialMode::GET_ENCODER_HOME_STEPS;
 
 bool initial_calibration_complete = false;
@@ -556,9 +558,8 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
     const bool no_joint_sign = jointSigns[i] != -1 && jointSigns[i] != 1;
     const int pulse_period = stepcount_positive ? movementTimeUs / stepsToMove[i] : 0;
     const bool pulse_period_invalid = stepcount_positive && pulse_period < 2;
-    const bool pulse_period_too_large = stepcount_positive && pulse_period > max_step_delay;
 
-    const bool failure_conditions_if_positive = stepcount_positive && (no_joint_sign || pulse_period_invalid || pulse_period_too_large);
+    const bool failure_conditions_if_positive = stepcount_positive && (no_joint_sign || pulse_period_invalid);
 
     if (stepcount_negative || failure_conditions_if_positive)
     {
@@ -572,7 +573,8 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
     jointDelays[i].clear();
     if (stepsToMove[i] > 0)
     {
-      jointDelays[i].push_back(movementTimeUs / stepsToMove[i]);
+      // Cap before storing in uint16_t so long periods cannot wrap.
+      jointDelays[i].push_back(min(movementTimeUs / stepsToMove[i], max_step_delay));
     }
   }
 
@@ -590,33 +592,20 @@ bool goStepsNoAccel(const int* stepsToMove, const int* jointSigns, const int mov
 
   if (pulse_period_too_short)
   {
-    // Apply one common scale factor so all joints keep their relative timing.
+    // Apply one common scale factor, then cap periods to storage capacity.
+    // Capped joints may finish earlier than the planned segment duration.
     // Integer ceiling ensures the shortest period reaches at least the minimum.
 
     const float scale_factor = float(min_step_delay) / shortest_period;
 
     for (int i = 0; i < numJoints; i++)
     {
-      // check validity of delays post-scalefactor first
-      for (const auto delay : jointDelays[i])
+      for (auto& delay : jointDelays[i])
       {
         // round up to avoid dipping below the min delay
         const uint32_t scaled_delay = uint32_t(ceilf(float(delay) * scale_factor));
 
-        if (scaled_delay > max_step_delay)
-        {
-          Serial.printf("Invalid scaling - scaled pulse period exceeds max step delay\n");
-          return false;
-        }
-      }
-    }
-
-    // then apply it
-    for (int i = 0; i < numJoints; i++)
-    {
-      for (auto& delay : jointDelays[i])
-      {
-        delay = uint16_t(ceilf(float(delay) * scale_factor));
+        delay = uint16_t(scaled_delay > uint32_t(max_step_delay) ? max_step_delay : scaled_delay);
       }
     }
   }
@@ -672,7 +661,7 @@ bool goStepsAccel(const int *stepsToMove, const int* jointSigns)
       //Serial.printf("%.2f\n", jointTimeScalar);
       if (!scaleVector(jointDelays[i], jointTimeScalar))
       {
-        Serial.printf("Scaled acceleration pulse period exceeds timer capacity\n");
+        Serial.printf("Invalid scaled acceleration pulse period\n");
         return false;
       }
     }
@@ -736,6 +725,50 @@ void computeStepDelays(const JointInfo jointInfo, const int numSteps, std::vecto
 
 
 
+
+
+// Integrate a Cartesian trapezoidal (or triangular for short paths) speed profile.
+// Each duration covers one equal-length segment, starting and ending at rest.
+bool computeSegmentDelays(const double pathLengthMm, const int numSegments,
+                          const double maxSpeedMmps, const double accelMmps2,
+                          std::vector<int>& segmentTimes)
+{
+  segmentTimes.clear();
+  if (!std::isfinite(pathLengthMm) || pathLengthMm <= 0 || numSegments <= 0 ||
+      !std::isfinite(maxSpeedMmps) || maxSpeedMmps <= 0 ||
+      !std::isfinite(accelMmps2) || accelMmps2 <= 0) return false;
+
+  const double peakSpeed = fmin(maxSpeedMmps, sqrt(accelMmps2 * pathLengthMm));
+  const double rampDistance = peakSpeed * peakSpeed / (2 * accelMmps2);
+  const double rampTime = peakSpeed / accelMmps2;
+  const double totalTime = 2 * rampTime + fmax(0.0, pathLengthMm - 2 * rampDistance) / peakSpeed;
+  double previousTime = 0;
+  segmentTimes.reserve(numSegments);
+  for (int i = 0; i < numSegments; i++)
+  {
+    const double position = pathLengthMm * (double(i + 1) / numSegments);
+    double time;
+    if (position <= rampDistance)
+      time = sqrt(2 * position / accelMmps2);
+    else if (position >= pathLengthMm - rampDistance)
+      time = totalTime - sqrt(2 * fmax(0.0, pathLengthMm - position) / accelMmps2);
+    else
+      time = rampTime + (position - rampDistance) / peakSpeed;
+
+    const double durationUs = ceil((time - previousTime) * 1000000.0);
+    if (!std::isfinite(durationUs) || durationUs < 1 || durationUs > INT_MAX)
+    {
+      segmentTimes.clear();
+      return false;
+    }
+    segmentTimes.push_back(int(durationUs));
+    previousTime = time;
+  }
+  return true;
+}
+
+
+
 void jogPositionJointSpace(float* desiredPoseXYZPR)
 {
   float desiredAngles[numJoints];
@@ -750,7 +783,10 @@ void jogPositionJointSpace(float* desiredPoseXYZPR)
 
 
 const float linepath_resolution_mm = 1.0;
-const float linepath_speed_mmps = 200;
+const float linepath_speed_mmps = 50;
+const float max_linepath_speed_mmps = 200;
+// Cartesian acceleration for line paths; independent of jointAccel.
+const float linepath_accel_mmps2 = 300;
 
 void jogPositionLinePath(float* desiredPoseXYZPR)
 {
@@ -813,6 +849,79 @@ void jogPositionLinePath(float* desiredPoseXYZPR)
   for (int i = 0; i < count; i++)
   {
     if (!jogJoints(trajectory[i].data(), false, segment_time_us))
+    {
+      Serial.printf("Line path stopped: segment rejected\n");
+      return;
+    }
+  }
+
+}
+
+
+void jogPositionLinePathAccel(float* desiredPoseXYZPR)
+{
+  if (!desiredPoseXYZPR) return;
+  for (int j = 0; j < numJoints; j++)
+  {
+    if (!std::isfinite(desiredPoseXYZPR[j]))
+    {
+      Serial.printf("Invalid line path target\n");
+      return;
+    }
+  }
+
+  float start[numJoints];
+  float delta[numJoints];
+  for (int axis = 0; axis < 3; axis++) start[axis] = currentJointPositions.back()[axis];
+  start[3] = currentJointAngles[1] + currentJointAngles[2] + currentJointAngles[3] - kinematics::halfPi;
+  start[4] = currentJointAngles[4];
+
+  arraySubtract(desiredPoseXYZPR, start, delta, numJoints);
+  const float distance = sqrtf(delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]);
+  if (distance == 0 && delta[3] == 0 && delta[4] == 0) return;
+
+  // For a pure orientation move, use the tool's angular travel as path length.
+  const float path_length = distance > 0 ? distance : fmaxf(fabsf(delta[3]), fabsf(delta[4])) * (limbLengths[3] + limbLengths[4]);
+
+  const float segments = ceilf(path_length / linepath_resolution_mm);
+  // Bound planning memory on the microcontroller.
+  if (!std::isfinite(segments) || segments > 4096 || segments < 1)
+  {
+    Serial.printf("Line path exceeds planning capacity\n");
+    return;
+  }
+
+  const int count = int(segments);
+
+  std::vector<std::array<float, numJoints>> trajectory;
+  trajectory.reserve(count);
+
+  // Preflight every waypoint before issuing any motor pulses
+  for (int i = 0; i < count; i++)
+  {
+    float pose[numJoints];
+    std::array<float, numJoints> angles;
+    const float fraction = float(i + 1) / count;
+    for (int j = 0; j < numJoints; j++)
+    {
+      pose[j] = i == count - 1 ? desiredPoseXYZPR[j] : start[j] + fraction * delta[j];
+    }
+
+    if (!kinematics::solveIK(pose, angles.data())) return;
+    trajectory.push_back(angles);
+  }
+
+  std::vector<int> segmentTimes;
+  if (!computeSegmentDelays(path_length, count, max_linepath_speed_mmps,
+                            linepath_accel_mmps2, segmentTimes))
+  {
+    Serial.printf("Invalid line path timing or segment time exceeds capacity\n");
+    return;
+  }
+
+  for (int i = 0; i < count; i++)
+  {
+    if (!jogJoints(trajectory[i].data(), false, segmentTimes[i]))
     {
       Serial.printf("Line path stopped: segment rejected\n");
       return;
@@ -945,7 +1054,7 @@ bool readEncoderAngles(const bool debug = false)
 
 void sendRobotAngleUpdate()
 {
-  Serial.printf("<%d", int(serialCommand::ENCODER_ANGLE_UPDATE));
+  Serial.printf("<%d", int(serialCommand::JOINT_ANGLE_UPDATE));
 
   for (int i = 0; i < numJoints; i++)
   {
@@ -958,6 +1067,13 @@ void sendRobotAngleUpdate()
   }
 
   Serial.printf(">\n");
+}
+
+
+// Reasons must not contain frame delimiters (<, >) or field separators (:).
+void sendMoveFailed(const serialCommand command, const char* reason)
+{
+  Serial.printf("<%d:%d:%s>\n", int(serialCommand::MOVE_FAILED), int(command), reason);
 }
 
 
@@ -976,8 +1092,9 @@ void parseCommand(const bool debug = false)
   //Serial.printf("%ld\n", serialBuffer[0].toInt());
 
 
-  // only allow the HOME & OVERRIDE command through if calibration is incomplete
-  if (!checkCalibrationStatus()
+  // if calibration has not been completed, and we are not in the bypass mode, return
+  // also allow through a few choice command signatures
+  if (!checkCalibrationStatus() 
         && commandSignature != serialCommand::HOME
         && commandSignature != serialCommand::OVERRIDE_CALIBRATION_SAFETY)
   {
@@ -1120,6 +1237,32 @@ void parseCommand(const bool debug = false)
       if (!commandValid) break;
 
       jogPositionLinePath(desiredPoseXYZPR);
+
+      break;
+    }
+
+    case serialCommand::TGT_POSITION_LINE_PATH_ACCEL:
+    {
+      float desiredPoseXYZPR[numJoints];
+      bool commandValid = true;
+
+      for (int i = 0; i < numJoints; i++)
+      {
+        if (serialBuffer[i+1].length() > 0)
+        {
+          desiredPoseXYZPR[i] = serialBuffer[i+1].toFloat();
+        }
+        else
+        {
+          Serial.printf("Position command incomplete: arg%d missing\n", i);
+          commandValid = false;
+          break;
+        }
+      }
+
+      if (!commandValid) break;
+
+      jogPositionLinePathAccel(desiredPoseXYZPR);
 
       break;
     }
@@ -1378,6 +1521,7 @@ void homeWithLimitSwitchFeedback()
     if (stepsToMoveAfterLimitSwitchClick[i] <= 0 || abs(limitSwitchSeekSigns[i]) != 1)
     {
       Serial.printf("Homing aborted: invalid joint configuration\n");
+      sendMoveFailed(serialCommand::HOME, "Invalid homing joint configuration");
       return;
     }
 
@@ -1397,6 +1541,7 @@ void homeWithLimitSwitchFeedback()
       if (/*seekSteps >= maxSeekSteps ||*/ uint32_t(millis() - startMs) >= limitSwitchSeekTimeoutMs)
       {
         Serial.printf("Homing aborted: seek limit reached for joint %d\n", i);
+        sendMoveFailed(serialCommand::HOME, "Homing seek timeout");
         return;
       }
       if (readLimitSwitchState())
@@ -1407,12 +1552,17 @@ void homeWithLimitSwitchFeedback()
         if (!waitForStableLimitSwitchState(false))
         {
           Serial.printf("Homing aborted: ambiguous limit input for joint %d\n", i);
+          sendMoveFailed(serialCommand::HOME, "Ambiguous homing limit input");
           return;
         }
         continue;
       }
 
-      goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs);
+      if (!goStepsNoAccel(stepsToMove, jointSigns, movementTimeUs))
+      {
+        sendMoveFailed(serialCommand::HOME, "Homing seek movement rejected");
+        return;
+      }
       seekSteps++;
 
       // update step count
@@ -1422,11 +1572,16 @@ void homeWithLimitSwitchFeedback()
     // reverse away from the switch to the calibrated home offset
     stepsToMove[i] = stepsToMoveAfterLimitSwitchClick[i];
     jointSigns[i] = -limitSwitchSeekSigns[i];
-    goStepsAccel(stepsToMove, jointSigns);
+    if (!goStepsAccel(stepsToMove, jointSigns))
+    {
+      sendMoveFailed(serialCommand::HOME, "Homing backoff movement rejected");
+      return;
+    }
 
     if (!waitForStableLimitSwitchState(false))
     {
       Serial.printf("Homing aborted: limit circuit did not settle closed after backoff\n");
+      sendMoveFailed(serialCommand::HOME, "Limit circuit did not settle closed after backoff");
       return;
     }
 
@@ -1442,6 +1597,7 @@ void homeWithLimitSwitchFeedback()
   if (!allJointsHomed)
   {
     Serial.printf("Partial homing complete; calibration remains incomplete\n");
+    sendMoveFailed(serialCommand::HOME, "Partial homing; calibration incomplete");
     return;
   }
 
@@ -1452,6 +1608,7 @@ void homeWithLimitSwitchFeedback()
   Serial.printf("Done homing\n");
   printArray("Current joint angles: ", currentJointAngles, numJoints);
   printArray("Current joint steps: ", currentJointSteps, numJoints);
+  sendRobotAngleUpdate();
 }
 
 
@@ -1464,7 +1621,12 @@ void returnToHome()
   memcpy(desiredAngles, returnJointAngles, numJoints * sizeof(float));
 
   const bool implementAcceleration = true;
-  jogJoints(desiredAngles, implementAcceleration);
+  if (!jogJoints(desiredAngles, implementAcceleration))
+  {
+    Serial.printf("Return to home failed: movement rejected\n");
+    sendMoveFailed(serialCommand::RETURN, "Return movement rejected");
+    return;
+  }
 
   Serial.printf("Returned to home position\n");
 }
@@ -1518,7 +1680,7 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
 
   // set led rate to a fast blink to indicate pre-calibration state
-  const float fast_led_rate = 5; // hz
+  const float fast_led_rate = 10; // hz
   setBuiltinLEDRate(fast_led_rate);
 
 
@@ -1543,7 +1705,11 @@ void setup()
   }
   currentJointPositions = kinematics::solveFK(currentJointAngles);
 
-  // post-vector allocation memory
+  printArray("Current joint steps: ", currentJointSteps, numJoints);
+  printArray("Current joint angles: ", currentJointAngles, numJoints);
+  printEndEffectorPosition(currentJointPositions);
+
+  // post vector allocation memory
   memory::printFreeMemory();
 
   // read encoder angles & assign joint angles
@@ -1556,6 +1722,12 @@ void setup()
 
   // printArray("Desired (home) angles: ", homeJointAngles, numJoints);
   // printArray("Current estimated joint angles: ", currentJointAngles, numJoints);
+
+  if (GLOBAL_MODE == specialMode::BYPASS_CALIBRATION_REQ)
+  {
+    initial_calibration_complete = true;
+    Serial.printf("Calibration bypass mode!!!");
+  }
 
 
   Serial.printf("\n[END SETUP]\n\n");

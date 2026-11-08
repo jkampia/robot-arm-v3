@@ -18,7 +18,8 @@ inline int sign(float x)
 
 
 /*
-Scales all values in a uint16_t vector by a scalar value
+Scales all values in a uint16_t vector, capping to storage capacity.
+Capped joints can finish before other joints in the move.
 */
 inline bool scaleVector(std::vector<uint16_t>& delayVector, float scalar)
 {
@@ -26,10 +27,13 @@ inline bool scaleVector(std::vector<uint16_t>& delayVector, float scalar)
   for (const auto delay : delayVector)
   {
     const double scaled = std::ceil(double(delay) * scalar);
-    if (scaled < 2 || scaled > UINT16_MAX) return false;
+    if (!std::isfinite(scaled) || scaled < 2) return false;
   }
   for (auto& delay : delayVector)
-    delay = uint16_t(std::ceil(double(delay) * scalar));
+  {
+    const double scaled = std::ceil(double(delay) * scalar);
+    delay = uint16_t(scaled > UINT16_MAX ? UINT16_MAX : scaled);
+  }
   return true;
 }
 
