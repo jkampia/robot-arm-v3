@@ -290,7 +290,7 @@ class ARM_5DOF:
             endEffector[1],
             endEffector[2],
             m.degrees(theta4World),
-            m.degrees(self.jointAngles[4]),
+            m.degrees(self.jointAngles[0] + self.jointAngles[4]),
         ]
 
 
@@ -303,7 +303,7 @@ class ARM_5DOF:
             float(endEffector[1]),
             float(endEffector[2]),
             m.degrees(theta4World),
-            m.degrees(jointAngles[4]),
+            m.degrees(jointAngles[0] + jointAngles[4]),
         ]
 
 
@@ -437,6 +437,9 @@ class ARM_5DOF:
 
         # base yaw
         theta1 = m.atan2(y, x)
+
+        # Match Teensy IK: commanded world roll includes the base rotation.
+        theta5 -= theta1
 
         # effective wrist offset
         wrist_len = l4 + l5

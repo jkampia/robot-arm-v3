@@ -10,75 +10,92 @@
 enum class serialCommand : int
 {
   HOME = 0,
+  RETURN,
+  CONFIRM_RECEIVE, // Report: <CONFIRM_RECEIVE:originating_command>
+  OVERRIDE_CALIBRATION_SAFETY,
+  MOVE_FAILED, // Report: <MOVE_FAILED:originating_command:reason>
+  HOME_J4,
+  DISABLE_ALL,
+  DISABLE_JOINT,
+  ENABLE_ALL,
+  ENABLE_JOINT,
 
-  TGT_ANGLES_JOINT_SPACE = 1,
-  TGT_POSITION_JOINT_SPACE = 2, 
+  JOINT_ANGLE_UPDATE,
+  REQUEST_JOINT_ANGLE_UPDATE,
 
-  TGT_ANGLES_JOINT_SPACE_ACCEL = 3,
-  TGT_POSITION_JOINT_SPACE_ACCEL = 4,
+  ENCODER_STEPS_UPDATE,
+  REQUEST_ENCODER_STEPS_UPDATE,
 
-  DELTA_ANGLES_JOINT_SPACE_ACCEL = 5,
-  DELTA_POSITION_JOINT_SPACE_ACCEL = 6,
+  GRIPPER_SET_ANGLE,
+  GRIPPER_CLOSE,
+  GRIPPER_OPEN,
 
-  JOINT_ANGLE_UPDATE = 7,
-  REQUEST_JOINT_ANGLE_UPDATE = 8,
+  TGT_ANGLES_JOINT_SPACE,
+  TGT_POSITION_JOINT_SPACE,
 
+  TGT_ANGLES_JOINT_SPACE_ACCEL,
+  TGT_POSITION_JOINT_SPACE_ACCEL,
 
-  GRIPPER_SET_ANGLE = 9,
-  GRIPPER_CLOSE = 10,
-  GRIPPER_OPEN = 11,
+  DELTA_ANGLES_JOINT_SPACE_ACCEL,
+  DELTA_POSITION_JOINT_SPACE_ACCEL,
 
-  CONFIRM_RECEIVE = 12,
+  TGT_POSITION_LINE_PATH,
+  TGT_POSITION_LINE_PATH_ACCEL,
 
-  RETURN = 13,
-
-  OVERRIDE_CALIBRATION_SAFETY = 14,
-
-  TGT_POSITION_LINE_PATH = 15,
-  TGT_POSITION_LINE_PATH_ACCEL = 16,
-
-  DELTA_POSITION_LINE_PATH = 17,
-  DELTA_POSITION_LINE_PATH_ACCEL = 18,
-
-  MOVE_FAILED = 19, // Report: <19:originating command:reason>
+  DELTA_POSITION_LINE_PATH,
+  DELTA_POSITION_LINE_PATH_ACCEL,
 };
 
+// All declared commands, including reports and commands not yet implemented.
 inline std::string serialCommandToString(serialCommand command)
 {
   switch (command)
   {
     case serialCommand::HOME: return "HOME";
+    case serialCommand::RETURN: return "RETURN";
+    case serialCommand::CONFIRM_RECEIVE: return "CONFIRM_RECEIVE";
+    case serialCommand::OVERRIDE_CALIBRATION_SAFETY: return "OVERRIDE_CALIBRATION_SAFETY";
+    case serialCommand::MOVE_FAILED: return "MOVE_FAILED";
+    case serialCommand::HOME_J4: return "HOME_J4";
+    case serialCommand::JOINT_ANGLE_UPDATE: return "JOINT_ANGLE_UPDATE";
+    case serialCommand::REQUEST_JOINT_ANGLE_UPDATE: return "REQUEST_JOINT_ANGLE_UPDATE";
+    case serialCommand::ENCODER_STEPS_UPDATE: return "ENCODER_STEPS_UPDATE";
+    case serialCommand::REQUEST_ENCODER_STEPS_UPDATE: return "REQUEST_ENCODER_STEPS_UPDATE";
+    case serialCommand::DISABLE_ALL: return "DISABLE_ALL";
+    case serialCommand::DISABLE_JOINT: return "DISABLE_JOINT";
+    case serialCommand::ENABLE_ALL: return "ENABLE_ALL";
+    case serialCommand::ENABLE_JOINT: return "ENABLE_JOINT";
+    case serialCommand::GRIPPER_SET_ANGLE: return "GRIPPER_SET_ANGLE";
+    case serialCommand::GRIPPER_CLOSE: return "GRIPPER_CLOSE";
+    case serialCommand::GRIPPER_OPEN: return "GRIPPER_OPEN";
     case serialCommand::TGT_ANGLES_JOINT_SPACE: return "TGT_ANGLES_JOINT_SPACE";
     case serialCommand::TGT_POSITION_JOINT_SPACE: return "TGT_POSITION_JOINT_SPACE";
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL: return "TGT_ANGLES_JOINT_SPACE_ACCEL";
     case serialCommand::TGT_POSITION_JOINT_SPACE_ACCEL: return "TGT_POSITION_JOINT_SPACE_ACCEL";
     case serialCommand::DELTA_ANGLES_JOINT_SPACE_ACCEL: return "DELTA_ANGLES_JOINT_SPACE_ACCEL";
     case serialCommand::DELTA_POSITION_JOINT_SPACE_ACCEL: return "DELTA_POSITION_JOINT_SPACE_ACCEL";
-    case serialCommand::JOINT_ANGLE_UPDATE: return "JOINT_ANGLE_UPDATE";
-    case serialCommand::REQUEST_JOINT_ANGLE_UPDATE: return "REQUEST_JOINT_ANGLE_UPDATE";
-    case serialCommand::GRIPPER_SET_ANGLE: return "GRIPPER_SET_ANGLE";
-    case serialCommand::GRIPPER_CLOSE: return "GRIPPER_CLOSE";
-    case serialCommand::GRIPPER_OPEN: return "GRIPPER_OPEN";
-    case serialCommand::CONFIRM_RECEIVE: return "CONFIRM_RECEIVE";
-    case serialCommand::RETURN: return "RETURN";
-    case serialCommand::OVERRIDE_CALIBRATION_SAFETY: return "OVERRIDE_CALIBRATION_SAFETY";
     case serialCommand::TGT_POSITION_LINE_PATH: return "TGT_POSITION_LINE_PATH";
     case serialCommand::TGT_POSITION_LINE_PATH_ACCEL: return "TGT_POSITION_LINE_PATH_ACCEL";
     case serialCommand::DELTA_POSITION_LINE_PATH: return "DELTA_POSITION_LINE_PATH";
     case serialCommand::DELTA_POSITION_LINE_PATH_ACCEL: return "DELTA_POSITION_LINE_PATH_ACCEL";
-    case serialCommand::MOVE_FAILED: return "MOVE_FAILED";
     default: return "UNKNOWN";
   }
 }
 
-// Commands currently handled by parseCommand.
+// Commands currently handled by parseCommand (subject to its calibration guard).
 inline bool commandSupported(serialCommand command)
 {
   switch (command)
   {
     case serialCommand::HOME:
+    case serialCommand::REQUEST_ENCODER_STEPS_UPDATE:
+    case serialCommand::HOME_J4:
     case serialCommand::RETURN:
     case serialCommand::OVERRIDE_CALIBRATION_SAFETY:
+    case serialCommand::DISABLE_ALL:
+    case serialCommand::DISABLE_JOINT:
+    case serialCommand::ENABLE_ALL:
+    case serialCommand::ENABLE_JOINT:
     case serialCommand::TGT_ANGLES_JOINT_SPACE:
     case serialCommand::TGT_ANGLES_JOINT_SPACE_ACCEL:
     case serialCommand::TGT_POSITION_JOINT_SPACE_ACCEL:

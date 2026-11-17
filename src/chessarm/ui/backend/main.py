@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 moduleDir = Path(__file__).resolve().parents[2]
@@ -86,10 +86,22 @@ def checkPoseJog(pose) -> None:
         raise ValueError("Pose jog Z must be at least 100 mm")
 
 
+def poseDeltaTarget(currentPose, axis, delta):
+    if axis not in ("X", "Y", "Z") or isinstance(delta, bool) or delta not in (-10, -5, -2, 2, 5, 10):
+        raise ValueError("Choose X, Y, or Z and a 2, 5, or 10 mm delta")
+    pose = [float(value) for value in currentPose]
+    if len(pose) != 5:
+        raise ValueError("Current robot pose must have five values")
+    pose[("X", "Y", "Z").index(axis)] += float(delta)
+    checkPoseJog(pose)
+    return pose
+
+
 class SerialConnectionManager:
 
-    def __init__(self, port: str = "/dev/ttyACM0", baudrate: int = 921600):
-        self.port = port
+    def __init__(self, port: str | None = None, baudrate: int = 921600):
+        self._ports = (port,) if port else ("/dev/ttyACM0", "/dev/ttyACM1")
+        self.port = self._ports[0]
         self.baudrate = baudrate
         self.connection = None
         self.status = "stopped"
@@ -219,6 +231,9 @@ class SerialConnectionManager:
                 f"raw_frame='<{frame}>'"
             )
             self._handleJointAngleUpdate(values)
+
+        elif command == serialCommands.get("ENCODER_STEPS_UPDATE"):
+            print(f"teensy encoder steps (J0-J4): {values}", flush=True)
 
         elif command == serialCommands.get("CONFIRM_RECEIVE"):
             self._handleReceiveConfirmation(values, frame)
@@ -357,12 +372,25 @@ class SerialConnectionManager:
         try:
             import serial
 
-            self.connection = serial.Serial(
-                self.port,
-                self.baudrate,
-                timeout=0.1,
-                write_timeout=0.1,
-            )
+            errors = []
+            for port in self._ports:
+                if self._stop.is_set():
+                    return
+                try:
+                    self.connection = serial.Serial(
+                        port,
+                        self.baudrate,
+                        timeout=0.1,
+                        write_timeout=0.1,
+                    )
+                except (serial.SerialException, OSError) as exc:
+                    errors.append(f"{port}: {exc}")
+                    continue
+                with self._lock:
+                    self.port = port
+                break
+            else:
+                raise RuntimeError("Could not open serial ports: " + "; ".join(errors))
             self._setStatus("connected")
             print(f"serial connected: {self.port} @ {self.baudrate}")
 
@@ -420,9 +448,17 @@ def envBool(name: str, default: bool) -> bool:
 
 
 serialConnection = SerialConnectionManager(
-    port=os.getenv("CHESSARM_SERIAL_PORT", "/dev/ttyACM0"),
+    port=os.getenv("CHESSARM_SERIAL_PORT"),
     baudrate=envInt("CHESSARM_SERIAL_BAUD", 921600),
 )
+
+
+from chessarm.parameters import ParameterManager
+parameterManager = ParameterManager(os.getenv("CHESSARM_PARAMETERS_FILE") or None)
+
+
+def parametersMessage():
+    return {"type": "parameters", "pickup_points": parameterManager.to_dict()}
 
 
 # robot
@@ -591,6 +627,53 @@ async def ping():
     return JSONResponse({"ok": True, "msg": "pong"})
 
 
+cameraLock = threading.Lock()
+camera = None
+
+
+def closeCamera():
+    global camera
+    with cameraLock:
+        if camera is not None:
+            camera.close()
+            camera = None
+
+
+@app.get("/api/camera/stream")
+def cameraStream():
+    """Open one shared Arducam on demand; fail before sending stream headers."""
+    global camera
+    try:
+        with cameraLock:
+            from chessarm.arducam import Arducam
+
+            if camera is None:
+                camera = Arducam(width=640, height=480, fps=15)
+            activeCamera = camera
+            firstFrame = activeCamera.jpeg_frame()
+    except Exception as exc:
+        closeCamera()
+        return JSONResponse({"error": f"Camera unavailable: {exc}"}, status_code=503)
+
+    def frames():
+        global camera
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+               + str(len(firstFrame)).encode("ascii") + b"\r\n\r\n" + firstFrame + b"\r\n")
+        try:
+            yield from activeCamera.mjpeg_frames()
+        except RuntimeError as exc:
+            print(f"camera stream stopped: {exc}")
+            with cameraLock:
+                if camera is activeCamera:
+                    activeCamera.close()
+                    camera = None
+
+    return StreamingResponse(
+        frames(), media_type=Arducam.MJPEG_CONTENT_TYPE,
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/serial")
 async def serialStatus():
     return JSONResponse(serialConnection.stateToDict())
@@ -702,6 +785,7 @@ async def stopBackgroundWorkers():
     if sensorPollingEnabled:
         sensorPolling.close()
     serialConnection.close()
+    await asyncio.to_thread(closeCamera)
 
 
 
@@ -748,6 +832,7 @@ async def ws_endpoint(ws: WebSocket):
         await ws.send_text(json.dumps(boardStateMessage()))
         await ws.send_text(json.dumps(serialStateMessage()))
         await ws.send_text(json.dumps(serialCommandsMessage()))
+        await ws.send_text(json.dumps(parametersMessage()))
 
     except WebSocketDisconnect:
         clients.discard(ws)
@@ -910,6 +995,16 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
+                elif cmd == "requestEncoderSteps":
+                    try:
+                        command = buildTeensyCommand("REQUEST_ENCODER_STEPS_UPDATE", [])
+                        serialConnection.writeCommand(command)
+                        print(f"Requested encoder steps: {command}", flush=True)
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Could not request encoder steps: {exc}")))
+                        continue
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+
                 elif cmd in ("home", "return"):
 
                     # Publish busy before dispatch: a fast serial response must
@@ -1042,10 +1137,30 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps(robotStateMessage()))
 
 
-                elif cmd == "jog_pose":
+                elif cmd == "save_pickup_point":
+                    try:
+                        pose = ParameterManager.validate_pose(args.get("pose"))
+                        checkPoseJog(pose)
+                        await asyncio.to_thread(parameterManager.set_pickup_point, args.get("name"), pose)
+                    except Exception as exc:
+                        await ws.send_text(json.dumps(ack(req_id, False, f"Could not save pickup point: {exc}")))
+                        continue
+                    await ws.send_text(json.dumps(ack(req_id, True)))
+                    await broadcast(parametersMessage())
+
+                elif cmd in ("jog_pose", "jog_pose_delta", "jog_pickup_point"):
+
 
                     try:
-                        pose = [float(value) for value in args["pose"]]
+                        if cmd == "jog_pose_delta":
+                            with robotLock:
+                                pose = poseDeltaTarget(
+                                    robot.currentForwardKinematicPose(), args.get("axis"), args.get("delta"),
+                                )
+                        elif cmd == "jog_pickup_point":
+                            pose = parameterManager.get_pickup_point(args.get("name"))
+                        else:
+                            pose = [float(value) for value in args["pose"]]
                         checkPoseJog(pose)
                         linePath = args.get("line_path", False)
                         if not isinstance(linePath, bool):

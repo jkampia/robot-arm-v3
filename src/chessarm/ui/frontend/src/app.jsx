@@ -57,6 +57,39 @@ function squareHasPiece(fen, square) {
   return false;
 }
 
+function CameraPreview({ colors }) {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!failed) return;
+    const timer = setTimeout(() => {
+      setFailed(false);
+      setAttempt((value) => value + 1);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [failed]);
+
+  return (
+    <div style={{ position: "relative", width: 640, maxWidth: "100%", aspectRatio: "4 / 3", background: colors.panelSoft, border: `1px solid ${colors.border}`, borderRadius: 8, overflow: "hidden" }}>
+      <img
+        key={attempt}
+        src={`/api/camera/stream?attempt=${attempt}`}
+        alt="Live Arducam preview"
+        width={640}
+        height={480}
+        onLoad={() => setFailed(false)}
+        onError={() => setFailed(true)}
+        style={{ display: failed ? "none" : "block", width: "100%", height: "100%", objectFit: "contain" }}
+      />
+      {failed && <div role="status" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: colors.muted }}>Camera unavailable. Retrying…</div>}
+    </div>
+  );
+}
+
+const pickupPointNames = ["top_right_pickup_point", "top_left_pickup_point", "bottom_right_pickup_point", "bottom_left_pickup_point"];
+const poseAxes = ["X", "Y", "Z", "P", "R"];
+
 export default function App() {
 
   const [wsStatus, setWsStatus] = useState("disconnected");
@@ -102,6 +135,9 @@ export default function App() {
   const [pose4, setPose4] = useState("0");
   const [poseLinePath, setPoseLinePath] = useState(false);
   const [poseAcceleration, setPoseAcceleration] = useState(true);
+
+  const [pickupPoints, setPickupPoints] = useState(Object.fromEntries(pickupPointNames.map((name) => [name, ["", "", "", "", ""]])));
+  const [savedPickupPoints, setSavedPickupPoints] = useState({});
 
   const [activeTab, setActiveTab] = useState("home");
 
@@ -187,7 +223,7 @@ export default function App() {
     { label: "J3", value: robotJoint3, steps: rawEncoderSteps[3] },
     { label: "J4", value: robotJoint4, steps: rawEncoderSteps[4] },
   ];
-  const jointDeltaAngles = [-30, -10, -5, 5, 10, 30];
+  const jointDeltaAngles = [-30, -10, -5, -1, 1, 5, 10, 30];
 
   const wsUrl = useMemo(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -220,6 +256,12 @@ export default function App() {
           setFrame2(toUrl(msg.displayTiles["1"]));
           setFrame3(toUrl(msg.displayTiles["2"]));
           setFrame4(toUrl(msg.displayTiles["3"]));
+        }
+
+        else if (msg.type === "parameters")
+        {
+          setSavedPickupPoints(msg.pickup_points);
+          setPickupPoints(Object.fromEntries(pickupPointNames.map((name) => [name, (msg.pickup_points[name] || ["", "", "", "", ""]).map(String)])));
         }
 
         else if (msg.type === "ack")
@@ -556,7 +598,8 @@ export default function App() {
       )}
 
       {activeTab === "controls" && (
-      <div style={{ display: "flex", flexDirection: "column", gap: 24, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 24, alignItems: "flex-start", maxWidth: "100%" }}>
         
         <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 16 }}>
 
@@ -613,6 +656,14 @@ export default function App() {
               disabled={wsStatus !== "connected" || robotStatus !== "ready"}
             >
               gripper close
+            </button>
+
+            <button
+              onClick={() => sendCmd("requestEncoderSteps")}
+              style={buttonStyle({ minHeight: 61, padding: "0 18px", fontSize: 16, fontWeight: 700 })}
+              disabled={wsStatus !== "connected" || serialStatus !== "connected" || robotStatus !== "ready"}
+            >
+              request encoder steps
             </button>
           </div>
 
@@ -781,7 +832,7 @@ export default function App() {
             border: `1px solid ${colors.border}`,
             borderRadius: 8,
             padding: 16,
-            width: 400,
+            width: 424,
             order: 4,
             display: "flex",
             flexDirection: "column",
@@ -795,13 +846,13 @@ export default function App() {
                 key={`${joint.label}-delta`}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(7, 44px)",
+                  gridTemplateColumns: "repeat(9, 40px)",
                   gap: 8,
                   alignItems: "center",
                   minHeight: 35,
                 }}
               >
-                {jointDeltaAngles.slice(0, 3).map((deltaAngle) => (
+                {jointDeltaAngles.filter((angle) => angle < 0).map((deltaAngle) => (
                   <button
                     key={`${joint.label}-${deltaAngle}`}
                     type="button"
@@ -814,7 +865,7 @@ export default function App() {
                   </button>
                 ))}
                 <span style={{ textAlign: "center", fontWeight: 700 }}>{joint.label}</span>
-                {jointDeltaAngles.slice(3).map((deltaAngle) => (
+                {jointDeltaAngles.filter((angle) => angle > 0).map((deltaAngle) => (
                   <button
                     key={`${joint.label}-${deltaAngle}`}
                     type="button"
@@ -959,6 +1010,44 @@ export default function App() {
 
         </div>
 
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 16 }}>
+            <h3 style={{ marginTop: 0, textAlign: "center" }}>Pose delta jog (mm)</h3>
+            {["X", "Y", "Z"].map((axis) => (
+              <div key={axis} style={{ display: "grid", gridTemplateColumns: "repeat(7, 44px)", gap: 8, marginBottom: 10, alignItems: "center" }}>
+                {[-10, -5, -2, 0, 2, 5, 10].map((delta) => delta === 0
+                  ? <span key={0} style={{ textAlign: "center", fontWeight: 700 }}>{axis}</span>
+                  : <button key={delta} title={`${axis} ${delta > 0 ? "+" : ""}${delta} mm`} onClick={() => sendCmd("jog_pose_delta", { axis, delta })} disabled={wsStatus !== "connected" || serialStatus !== "connected" || robotStatus !== "ready"} style={buttonStyle({ minHeight: 34, padding: "0 6px" })}>{delta > 0 ? "+" : ""}{delta}</button>)}
+              </div>
+            ))}
+          </div>
+          <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 16, maxWidth: "100%", overflowX: "auto" }}>
+            <h3 style={{ marginTop: 0 }}>Board corner pickup points</h3>
+            <p style={{ color: colors.muted, fontSize: 12 }}>X, Y, Z in mm · P, R in degrees. Save before jogging.</p>
+            {pickupPointNames.map((name) => {
+              const values = pickupPoints[name];
+              const valid = values.every((value) => value.trim() !== "" && Number.isFinite(Number(value)));
+              const saved = savedPickupPoints[name];
+              const unchanged = saved && values.every((value, index) => value.trim() !== "" && Number(value) === saved[index]);
+              return (
+                <div key={name} style={{ marginBottom: 16 }}>
+                  <div style={{ marginBottom: 6, fontSize: 13 }}>{name}</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                    {poseAxes.map((axis, index) => (
+                      <label key={axis} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+                        {axis}
+                        <input aria-label={`${name} ${axis}`} type="number" step="0.1" value={values[index]} onChange={(event) => setPickupPoints((points) => ({ ...points, [name]: points[name].map((value, i) => i === index ? event.target.value : value) }))} style={inputStyle({ width: 68, padding: "8px 6px" })} />
+                      </label>
+                    ))}
+                    <button disabled={!valid || wsStatus !== "connected"} onClick={() => sendCmd("save_pickup_point", { name, pose: values.map(Number) })} style={buttonStyle({ minHeight: 34 })}>Save</button>
+                    <button disabled={!unchanged || wsStatus !== "connected" || serialStatus !== "connected" || robotStatus !== "ready"} onClick={() => sendCmd("jog_pickup_point", { name })} style={buttonStyle({ minHeight: 34 })}>Jog</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div
           style={{
             display: "grid",
@@ -979,6 +1068,8 @@ export default function App() {
           />
         </div>
       </div>
+      <CameraPreview colors={colors} />
+      </div>
       )}
 
       {activeTab === "image-pipeline" && (
@@ -998,10 +1089,10 @@ export default function App() {
               display: "grid",
               gridTemplateColumns: "repeat(2, minmax(260px, 1fr))",
               gap: 24,
-              maxWidth: 1100,
+              maxWidth: 1320,
             }}
           >
-            <img src={frame1 ?? ""} alt="Pipeline frame 1" style={{ width: "100%", height: "auto", background: colors.panelSoft, border: `1px solid ${colors.border}`, borderRadius: 8 }} />
+            <CameraPreview colors={colors} />
             <img src={frame2 ?? ""} alt="Pipeline frame 2" style={{ width: "100%", height: "auto", background: colors.panelSoft, border: `1px solid ${colors.border}`, borderRadius: 8 }} />
             <img src={frame3 ?? ""} alt="Pipeline frame 3" style={{ width: "100%", height: "auto", background: colors.panelSoft, border: `1px solid ${colors.border}`, borderRadius: 8 }} />
             <img src={frame4 ?? ""} alt="Pipeline frame 4" style={{ width: "100%", height: "auto", background: colors.panelSoft, border: `1px solid ${colors.border}`, borderRadius: 8 }} />

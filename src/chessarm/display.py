@@ -6,7 +6,6 @@ import numpy as np
 import base64
 
 from colors import COLOR_RGB
-from frame_server.request_frame import FrameRequester
 from vision import ImageProcessor, CalibrationHelper
 
 
@@ -55,7 +54,6 @@ class ChessarmDisplay:
 
         self.displayTiles = [DisplayTile() for _ in range(self.numTiles)]
 
-        self.frameRequester = FrameRequester()
         self.imageProcessor = ImageProcessor()
         self.calibrationHelper = CalibrationHelper()
 
@@ -63,9 +61,8 @@ class ChessarmDisplay:
 
 
 
-    def updateAllDisplayTiles(self):
-        # defines where each displayTile pulls its data from 
-        originalFrame = self.frameRequester.requestFrameToMat()
+    def updateAllDisplayTiles(self, originalFrame=None):
+        """Update image tiles when a frame is supplied, and refresh the board."""
         
         if originalFrame is not None:
             
@@ -317,15 +314,7 @@ class ChessarmDisplay:
 
             if key == ord(' ') or key == 32 :  # spacebar
 
-                originalFrame = self.frameRequester.requestFrameToMat()
-                self.displayTiles[0] = originalFrame.copy()
-
-                boardCorners = self.calibrationHelper.readCalibrationFromFile("board_corners.txt")
-                rectifiedFrame, predictions = self.imageProcessor.occupancyDetectionPipeline(originalFrame, boardCorners)
-                rectifiedFrame, scale = self.imageProcessor.downscaleForDisplay(rectifiedFrame, max_width=480, max_height=480)
-                self.displayTiles[1] = self.embedInTile(rectifiedFrame)
-
-                self.displayTiles[3] = self.frameEmptyChessboard()
+                self.updateAllDisplayTiles()
 
                 displayFrame = self.createDisplayOutput()
                 cv2.imshow(self.windowName, displayFrame)

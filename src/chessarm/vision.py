@@ -2,11 +2,9 @@ from PIL import Image
 import os
 import cv2
 import numpy as np
-from pathlib import Path
 import time
 
 
-from frame_server.request_frame import FrameRequester
 
 
 try:
@@ -664,34 +662,24 @@ class CalibrationHelper:
 
 def main():
 
-    # demo of how to use the pipeline
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run occupancy detection on an image.")
+    parser.add_argument("image", help="Path to the board image")
+    args = parser.parse_args()
 
     startTime = time.time()
 
     imageProcessor = ImageProcessor()
     calibrationHelper = CalibrationHelper()
-    frameRequester = FrameRequester()
-
-    originalFrame = frameRequester.requestFrameToMat()
+    originalFrame = cv2.imread(args.image)
+    if originalFrame is None:
+        parser.error(f"Could not read image: {args.image}")
     boardCorners = calibrationHelper.readCalibrationFromFile("board_corners.txt")
 
     rectifiedFrame, predictions = imageProcessor.occupancyDetectionPipeline(originalFrame, boardCorners)
 
     cv2.imshow("board occupancy", rectifiedFrame) 
-
-#    directory = Path("frame_server")
-#    
-#    for imagePath in directory.glob("*.jpg"):
-#    
-#        originalFrame = cv2.imread(imagePath)
-#   
-#        rectifiedFrame, predictions, edgedFrame = processor.occupancyDetectionPipeline(originalFrame)
-#
-#        # display rectified frame
-#        cv2.imshow(str(imagePath), rectifiedFrame) 
-#        cv2.imshow(f"{str(imagePath)} edges", edgedFrame) 
-
-
 
     stopTime = time.time()
     print(f"Time elapsed: {stopTime-startTime} s")

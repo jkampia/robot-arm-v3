@@ -1,16 +1,23 @@
-from occupancy_detector import ImageProcessor
+from vision import ImageProcessor
 
 import cv2
 
 
 def main():
 
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate training tiles from board images.")
+    parser.add_argument("images", nargs="+", help="Paths to board images")
+    args = parser.parse_args()
+
     processor = ImageProcessor()
-
     frames = []
-
-    frame1 = cv2.imread("frame_server/testframe.jpg")
-    frames.append(frame1)
+    for image_path in args.images:
+        frame = cv2.imread(image_path)
+        if frame is None:
+            parser.error(f"Could not read image: {image_path}")
+        frames.append(frame)
 
     n = 0
     
